@@ -1,7 +1,7 @@
 <!--
 PATH: /index.html
 FILE: index.html
-PURPOSE: Medical Sound Pad UI — per-group boards, per-group Kit Editor, per-pad sampling & mic record, sentence builder (single track) with scenes & story chain, save/load kits. Includes draggable large-button QWERTY keyboard. Shift key narrowed so Backspace fits on the row.
+PURPOSE: AAC Sound Board UI — per-group boards, per-group Kit Editor, per-pad sampling & mic record, sentence builder (single track) with scenes & story chain, save/load kits. Includes draggable large-button QWERTY keyboard.
 Created by Scott Russo.
 -->
 <!DOCTYPE html>
@@ -9,7 +9,7 @@ Created by Scott Russo.
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Medical Sound Pad</title>
+<title>AAC Sound Board</title>
 <style>
   :root{ --bg:#0b0f12; --panel:#0f161a; --ink:#e9f6f2; --muted:#a8bdb5; --line:rgba(255,255,255,.14); }
   *{box-sizing:border-box}
@@ -19,9 +19,40 @@ Created by Scott Russo.
   .spacer{flex:1}
   .label{font-weight:900;letter-spacing:.3px}
   .card{background:linear-gradient(180deg,#121a1f,#0e1418);border:1px solid var(--line);border-radius:16px;padding:12px}
-  .btn{border:1px solid var(--line);background:#141c1f;color:var(--ink);padding:8px 12px;border-radius:10px;cursor:pointer}
+
+  /* 3D button base style (applies to ALL .btn in the app) */
+  .btn{
+    border:1px solid rgba(255,255,255,.18);
+    background:
+      radial-gradient(120% 140% at 50% 0%, rgba(255,255,255,.18), transparent 55%),
+      linear-gradient(180deg,#1e2a31,#10171c);
+    color:var(--ink);
+    padding:8px 12px;
+    border-radius:10px;
+    cursor:pointer;
+    box-shadow:
+      0 2px 0 rgba(0,0,0,.9),
+      0 0 0 1px rgba(0,0,0,.7) inset,
+      0 0 10px rgba(66,198,255,.2);
+    text-shadow:0 1px 0 rgba(0,0,0,.9);
+  }
   .btn.small{padding:6px 10px;font-size:12px}
   .btn[aria-pressed="true"]{outline:2px solid rgba(66,198,255,.5)}
+  .btn:hover{
+    box-shadow:
+      0 3px 0 rgba(0,0,0,.9),
+      0 0 0 1px rgba(255,255,255,.12) inset,
+      0 0 14px rgba(66,198,255,.35);
+    filter:brightness(1.06);
+  }
+  .btn:active{
+    transform:translateY(1px);
+    box-shadow:
+      0 1px 0 rgba(0,0,0,.9),
+      0 0 0 1px rgba(0,0,0,.8) inset,
+      0 0 10px rgba(66,198,255,.25);
+  }
+
   .pill{font:11px;padding:2px 8px;border:1px solid var(--line);border-radius:999px;color:#c9ded6}
   .muted{color:var(--muted)}
   .small{font-size:12px}
@@ -33,9 +64,31 @@ Created by Scott Russo.
   input::file-selector-button{display:none}
   .visually-hidden{position:absolute !important;width:1px;height:1px;padding:0;margin:-1px;border:0;clip:rect(0 0 0 0);overflow:hidden}
 
-  #boards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-top:8px}
-  .board{--ac:#42c6ff; --ac-rgb:66,198,255; border:1px solid rgba(var(--ac-rgb),.55);border-radius:14px;padding:10px;background:linear-gradient(180deg,#11181d,#0d1418); position:relative; box-shadow:0 0 22px rgba(var(--ac-rgb),.15) inset}
-  .board .title{display:flex;align-items:center;gap:10px;font-weight:900}
+  /* Boards area */
+  #boards{
+    position:relative;
+    margin-top:8px;
+    min-height:320px;
+    height:calc(100vh - 180px);
+    overflow:auto;
+  }
+
+  /* Each group as a draggable, resizable window */
+  .board{
+    --ac:#42c6ff;
+    --ac-rgb:66,198,255;
+    border:1px solid rgba(var(--ac-rgb),.55);
+    border-radius:14px;
+    padding:10px;
+    background:linear-gradient(180deg,#11181d,#0d1418);
+    position:absolute;
+    box-shadow:0 0 22px rgba(var(--ac-rgb),.15) inset;
+    min-width:260px;
+    min-height:220px;
+    resize:both;
+    overflow:auto;
+  }
+  .board .title{display:flex;align-items:center;gap:10px;font-weight:900;cursor:move}
   .board .dot{width:10px;height:10px;border-radius:50%;background:var(--ac);box-shadow:0 0 12px rgba(var(--ac-rgb),.6);border:1px solid rgba(255,255,255,.22)}
   .board .sub{font:11px;color:#a8bbb4;margin-left:auto}
   .board .hdr-btns{display:flex;gap:8px;margin-left:6px}
@@ -89,7 +142,19 @@ Created by Scott Russo.
     .kit-grid{grid-template-columns:1fr}
     .kit-row{grid-template-columns:1fr}
   }
-  @media (max-width:520px){ #boards{grid-template-columns:1fr} }
+  @media (max-width:520px){
+    #boards{height:auto;min-height:260px}
+  }
+
+  /* Ensure group cards wrap their button row so Delete doesn't overhang */
+  #groupList > div{
+    flex-wrap:wrap;
+  }
+
+  /* Ensure kit cards wrap their button row so Delete doesn't overhang */
+  #kitList > div{
+    flex-wrap:wrap;
+  }
 
   /* Bigger primary controls */
   #composeBtn,#sentencePlayBtn,#sentenceStopBtn,#sentenceBackBtn,#sentenceClearBtn,#songModeBtn,#chainEditBtn,#chainClearBtn{
@@ -98,9 +163,48 @@ Created by Scott Russo.
   .scene-bar .btn{padding:12px 16px;font-size:16px;border-radius:12px}
   #wpmNum.num,#gapMsNum.num{width:120px;padding:10px 12px;font-size:16px;border-radius:12px}
 
-  /* Header buttons bigger */
-  #stopAllBtn,#groupsBtn,#toggleSeqBtn,#toggleKitMgrBtn,#toggleKbBtn{
-    padding:14px 18px;font-size:16px;border-radius:12px;min-height:44px;min-width:44px;
+  /* Header buttons bigger + 3D look */
+  #stopAllBtn,
+  #groupsBtn,
+  #toggleSeqBtn,
+  #toggleKitMgrBtn,
+  #toggleKbBtn{
+    padding:14px 22px;
+    font-size:16px;
+    border-radius:14px;
+    min-height:46px;
+    min-width:80px;
+    border:1px solid rgba(255,255,255,.18);
+    background:
+      radial-gradient(120% 140% at 50% 0%, rgba(255,255,255,.18), transparent 55%),
+      linear-gradient(180deg,#1e2a31,#10171c);
+    box-shadow:
+      0 3px 0 rgba(0,0,0,.9),
+      0 0 0 1px rgba(0,0,0,.7) inset,
+      0 0 18px rgba(66,198,255,.25);
+    text-shadow:0 1px 0 rgba(0,0,0,.9);
+  }
+  #stopAllBtn:hover,
+  #groupsBtn:hover,
+  #toggleSeqBtn:hover,
+  #toggleKitMgrBtn:hover,
+  #toggleKbBtn:hover{
+    box-shadow:
+      0 4px 0 rgba(0,0,0,.9),
+      0 0 0 1px rgba(255,255,255,.12) inset,
+      0 0 22px rgba(66,198,255,.4);
+    filter:brightness(1.08);
+  }
+  #stopAllBtn:active,
+  #groupsBtn:active,
+  #toggleSeqBtn:active,
+  #toggleKitMgrBtn:active,
+  #toggleKbBtn:active{
+    transform:translateY(1px);
+    box-shadow:
+      0 1px 0 rgba(0,0,0,.9),
+      0 0 0 1px rgba(0,0,0,.8) inset,
+      0 0 14px rgba(66,198,255,.3);
   }
 
   /* Keyboard (draggable) */
@@ -109,6 +213,17 @@ Created by Scott Russo.
   #kbBar{display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:move}
   #kbTitle{font-weight:900}
   #kbInput{width:100%;padding:12px 14px;border-radius:12px;border:1px solid var(--line);background:#0f1519;color:#e9f6f2;font-size:20px}
+
+  /* Bigger and more spaced window controls (- and ✕) */
+  .kb-window-controls{display:flex;align-items:center;gap:16px;margin-left:4px}
+  #kbBar .btn{
+    padding:12px 20px;
+    font-size:18px;
+    border-radius:14px;
+    min-width:64px;
+    min-height:48px;
+  }
+
   .kb-rows{display:flex;flex-direction:column;gap:10px;margin-top:10px}
   .kb-row{display:flex;gap:10px;flex-wrap:nowrap}
   .key{
@@ -125,13 +240,41 @@ Created by Scott Russo.
     letter-spacing:.5px;
     cursor:pointer;
   }
-  .key.wide{min-width:140px}             /* SHIFT narrowed */
-  .key.backspace{min-width:120px}        /* Backspace stays narrower */
-  .key.space{flex:1;min-height:96px}
+  .key.wide{min-width:140px}
+  .key.backspace{min-width:120px}
+
+  /* Space row: centered, space bar about half-width, big side buttons */
+  .kb-row-space{justify-content:center}
+  .key.space{
+    flex:0 0 50%;
+    max-width:50%;
+    min-width:0;
+    min-height:96px;
+  }
+  .kb-big-action{
+    flex:0 0 25%;
+    max-width:25%;
+    min-width:0;
+    min-height:96px;
+    font-size:20px;
+    font-weight:800;
+    border-radius:18px;
+  }
+  .kb-big-action span{display:block}
+
   .kb-actions{display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap}
   .kb-pill{font:12px;padding:4px 12px;border:1px solid var(--line);border-radius:999px;color:#c9ded6}
-  .kb-right{margin-left:auto;display:flex;gap:8px}
+  .kb-right{margin-left:auto;display:flex;gap:8px;margin-right:12%}
   .kb-small{font-size:12px}
+
+  /* Larger, wider Clear button */
+  .kb-clear-large{
+    padding:12px 24px;
+    font-size:18px;
+    border-radius:14px;
+    min-width:160px;
+    min-height:60px;
+  }
 
   @media (max-width:1100px){
     .kb-row{flex-wrap:wrap}
@@ -142,7 +285,7 @@ Created by Scott Russo.
   <div class="wrap">
     <div class="card">
       <div class="row">
-        <div class="label">Medical Sound Pad</div>
+        <div class="label">AAC Sound Board</div>
         <span class="spacer"></span>
         <button class="btn small" id="stopAllBtn">Stop All</button>
         <button class="btn small" id="groupsBtn">Groups</button>
@@ -248,17 +391,17 @@ Created by Scott Russo.
       <div id="kbTitle">Keyboard</div>
       <span class="kb-pill" id="kbLinkPill" aria-pressed="true">Link to Sentence</span>
       <span class="spacer"></span>
-      <button class="btn small" id="kbMinBtn" title="Minimize">—</button>
-      <button class="btn small" id="kbCloseBtn" title="Close">✕</button>
+      <div class="kb-window-controls">
+        <button class="btn" id="kbMinBtn" title="Minimize">—</button>
+        <button class="btn" id="kbCloseBtn" title="Close">✕</button>
+      </div>
     </div>
     <input id="kbInput" type="text" placeholder="Type here…">
     <div class="kb-rows" id="kbRows"></div>
     <div class="kb-actions">
-      <button class="btn" id="kbAddSentence">Add to Sentence</button>
-      <button class="btn" id="kbAddVocab">Add to Vocabulary</button>
       <span class="kb-small muted">Saved as local vocabulary; caregivers can map words to pads later.</span>
       <span class="kb-right">
-        <button class="btn small" id="kbClear">Clear</button>
+        <button class="btn kb-clear-large" id="kbClear">Clear</button>
       </span>
     </div>
   </div>
@@ -334,6 +477,45 @@ Created by Scott Russo.
       ROWS.forEach((row)=>{
         const div = document.createElement('div');
         div.className = 'kb-row';
+
+        if (row === 'SPACE'){
+          div.classList.add('kb-row-space');
+
+          const addSentenceBtn = document.createElement('button');
+          addSentenceBtn.id = 'kbAddSentence';
+          addSentenceBtn.className = 'btn kb-big-action';
+          addSentenceBtn.innerHTML = '<span>Add to</span><span>Sentence</span>';
+          addSentenceBtn.addEventListener('click',()=>{
+            const t = kbInput.value.trim();
+            if(!t) return;
+            window.MedPadAPI.addWordToken(t);
+            kbInput.value = '';
+          });
+          div.appendChild(addSentenceBtn);
+
+          const spaceBtn = document.createElement('button');
+          spaceBtn.className = 'key space';
+          spaceBtn.textContent = 'Space';
+          spaceBtn.addEventListener('click',()=> press('SPACE'));
+          div.appendChild(spaceBtn);
+
+          const addVocabBtn = document.createElement('button');
+          addVocabBtn.id = 'kbAddVocab';
+          addVocabBtn.className = 'btn kb-big-action';
+          addVocabBtn.innerHTML = '<span>Add to</span><span>Vocabulary</span>';
+          addVocabBtn.addEventListener('click',()=>{
+            const t = kbInput.value.trim();
+            if(!t) return;
+            const list = loadVocab();
+            if(!list.includes(t)) list.unshift(t);
+            saveVocab(list);
+          });
+          div.appendChild(addVocabBtn);
+
+          kbRows.appendChild(div);
+          return;
+        }
+
         row.split(' ').forEach(k=>{
           const btn = document.createElement('button');
           btn.className = 'key';
@@ -365,20 +547,6 @@ Created by Scott Russo.
     }
     build();
 
-    document.getElementById('kbAddSentence').addEventListener('click',()=>{
-      const t = kbInput.value.trim();
-      if(!t) return;
-      window.MedPadAPI.addWordToken(t);
-      kbInput.value = '';
-    });
-    document.getElementById('kbAddVocab').addEventListener('click',()=>{
-      const t = kbInput.value.trim();
-      if(!t) return;
-      const list = loadVocab();
-      if(!list.includes(t)) list.unshift(t);
-      saveVocab(list);
-      flash('#kbAddVocab','Added');
-    });
     document.getElementById('kbClear').addEventListener('click',()=> kbInput.value='');
 
     kbLinkPill.addEventListener('click',()=>{
