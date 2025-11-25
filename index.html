@@ -156,7 +156,7 @@ Created by Scott Russo.
     flex-wrap:wrap;
   }
 
-  /* Bigger primary controls */
+  /* Bigger primary controls (sentence builder + scenes) */
   #composeBtn,#sentencePlayBtn,#sentenceStopBtn,#sentenceBackBtn,#sentenceClearBtn,#songModeBtn,#chainEditBtn,#chainClearBtn{
     padding:14px 18px;font-size:16px;border-radius:12px;
   }
@@ -205,6 +205,26 @@ Created by Scott Russo.
       0 1px 0 rgba(0,0,0,.9),
       0 0 0 1px rgba(0,0,0,.8) inset,
       0 0 14px rgba(66,198,255,.3);
+  }
+
+  /* Larger kit manager header controls (Save As / Export / Import) for eye-control use */
+  #kitSaveAs,
+  #kitExport,
+  #kitImportBtn{
+    padding:12px 18px;
+    font-size:16px;
+    border-radius:14px;
+    min-width:110px;
+    min-height:46px;
+  }
+
+  /* Larger buttons inside the saved kit list ("save kit window") */
+  #kitList .btn.small{
+    padding:10px 16px;
+    font-size:15px;
+    border-radius:12px;
+    min-width:96px;
+    min-height:44px;
   }
 
   /* Keyboard (draggable) */
@@ -278,6 +298,80 @@ Created by Scott Russo.
 
   @media (max-width:1100px){
     .kb-row{flex-wrap:wrap}
+  }
+
+  /* Responsive keyboard sizing for phones and small screens */
+  @media (max-width:768px){
+    #kbPanel{
+      width:96vw;
+      left:2vw;
+      right:2vw;
+      bottom:8px;
+      max-height:70vh;
+      padding:8px;
+      overflow-y:auto;
+    }
+    #kbInput{
+      font-size:18px;
+      padding:10px 12px;
+    }
+    .key{
+      min-width:72px;
+      min-height:72px;
+      font-size:24px;
+    }
+    .key.backspace,
+    .key.wide{
+      min-width:90px;
+    }
+    .key.space{
+      min-height:72px;
+    }
+    .kb-big-action{
+      min-height:72px;
+      font-size:18px;
+    }
+    #kbBar .btn{
+      min-width:56px;
+      min-height:44px;
+      padding:8px 12px;
+      font-size:16px;
+    }
+    .kb-clear-large{
+      min-width:150px;
+      min-height:56px;
+      font-size:18px;
+      padding:10px 18px;
+    }
+  }
+
+  @media (max-width:480px){
+    #kbPanel{
+      width:98vw;
+      left:1vw;
+      right:1vw;
+      max-height:75vh;
+    }
+    .key{
+      min-width:58px;
+      min-height:58px;
+      font-size:20px;
+    }
+    .key.backspace,
+    .key.wide{
+      min-width:82px;
+    }
+    .kb-big-action{
+      flex:0 0 30%;
+      max-width:30%;
+      min-height:58px;
+      font-size:16px;
+    }
+    .key.space{
+      flex:0 0 40%;
+      max-width:40%;
+      min-height:58px;
+    }
   }
 </style>
 </head>
