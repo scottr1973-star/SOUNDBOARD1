@@ -228,7 +228,7 @@ Created by Scott Russo.
   }
 
   /* Keyboard (draggable) */
-  #kbPanel{position:fixed;left:12px;bottom:12px;width:min(1120px,98vw);background:linear-gradient(180deg,#121a1f,#0e1418);border:1px solid var(--line);border-radius:16px;padding:10px;box-shadow:0 22px 44px rgba(0,0,0,.5);display:none;z-index:50}
+  #kbPanel{position:fixed;left:12px;bottom:12px;width:min(1120px,98vw);background:linear-gradient(180deg,#121a1f,#0e1418);border:1px solid var(--line);border-radius:16px;padding:10px;box-shadow:0 22px 44pxrgba(0,0,0,.5);display:none;z-index:50}
   #kbPanel.show{display:block}
   #kbBar{display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:move}
   #kbTitle{font-weight:900}
@@ -474,7 +474,8 @@ Created by Scott Russo.
           <input type="file" id="kitImportFile" accept=".json" hidden>
         </div>
         <div class="small muted" style="margin:4px 0 10px">Local library saves groups, colors, pads, sentences, scenes & chain.</div>
-        <div id="kitList" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px"></div>
+        <!-- WIDTH FIX APPLIED HERE: minmax(320px,1fr) -->
+        <div id="kitList" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px"></div>
       </div>
     </div>
   </div>
