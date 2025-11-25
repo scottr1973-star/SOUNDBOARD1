@@ -1,717 +1,1982 @@
-<!--
-PATH: /index.html
-FILE: index.html
-PURPOSE: AAC Sound Board UI — per-group boards, per-group Kit Editor, per-pad sampling & mic record, sentence builder (single track) with scenes & story chain, save/load kits. Includes draggable large-button QWERTY keyboard.
+/* 
+PATH: /js/soundboard.js
+FILE: soundboard.js
+PURPOSE: AAC Sound Board logic — per-group boards with selectable colors, per-group Kit Editor, per-pad sampling & mic record, optional per-pad image, sentence builder (single track) with scenes & story chain, save/load (incl. sentences & images).
+Features:
+- Per-group JSON export/import from Kit Editor (plus full-kit save).
+- Recorded audio saved/restored via base64 WAV.
+- Quick Phrase (Vocabulary → Pad) mapping, with delete.
+- Draggable, resizable group windows; drag clamped only to top-left.
+- Window size (width/height) persisted in kits so resized boards keep their size on import.
 Created by Scott Russo.
--->
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>AAC Sound Board</title>
-<style>
-  :root{ --bg:#0b0f12; --panel:#0f161a; --ink:#e9f6f2; --muted:#a8bdb5; --line:rgba(255,255,255,.14); }
-  *{box-sizing:border-box}
-  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:14px/1.35 Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial}
-  .wrap{max-width:1400px;margin:0 auto;padding:12px}
-  .row{display:flex;align-items:center;gap:8px;margin:8px 0}
-  .spacer{flex:1}
-  .label{font-weight:900;letter-spacing:.3px}
-  .card{background:linear-gradient(180deg,#121a1f,#0e1418);border:1px solid var(--line);border-radius:16px;padding:12px}
+*/
+(function(){
+  'use strict';
 
-  /* 3D button base style (applies to ALL .btn in the app) */
-  .btn{
-    border:1px solid rgba(255,255,255,.18);
-    background:
-      radial-gradient(120% 140% at 50% 0%, rgba(255,255,255,.18), transparent 55%),
-      linear-gradient(180deg,#1e2a31,#10171c);
-    color:var(--ink);
-    padding:8px 12px;
-    border-radius:10px;
-    cursor:pointer;
-    box-shadow:
-      0 2px 0 rgba(0,0,0,.9),
-      0 0 0 1px rgba(0,0,0,.7) inset,
-      0 0 10px rgba(66,198,255,.2);
-    text-shadow:0 1px 0 rgba(0,0,0,.9);
-  }
-  .btn.small{padding:6px 10px;font-size:12px}
-  .btn[aria-pressed="true"]{outline:2px solid rgba(66,198,255,.5)}
-  .btn:hover{
-    box-shadow:
-      0 3px 0 rgba(0,0,0,.9),
-      0 0 0 1px rgba(255,255,255,.12) inset,
-      0 0 14px rgba(66,198,255,.35);
-    filter:brightness(1.06);
-  }
-  .btn:active{
-    transform:translateY(1px);
-    box-shadow:
-      0 1px 0 rgba(0,0,0,.9),
-      0 0 0 1px rgba(0,0,0,.8) inset,
-      0 0 10px rgba(66,198,255,.25);
+  /* ========= helpers ========= */
+  const $  = (s, r=document) => r.querySelector(s);
+  const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+  const statusEl = $('#status');
+
+  function status(msg){
+    if (statusEl) statusEl.textContent = msg;
   }
 
-  .pill{font:11px;padding:2px 8px;border:1px solid var(--line);border-radius:999px;color:#c9ded6}
-  .muted{color:var(--muted)}
-  .small{font-size:12px}
-  .num{width:80px;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:#0f1519;color:#e9f6f2}
-
-  input[type="text"], input[type="number"], select, input[type="color"]{
-    padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:#0f1519;color:#e9f6f2
-  }
-  input::file-selector-button{display:none}
-  .visually-hidden{position:absolute !important;width:1px;height:1px;padding:0;margin:-1px;border:0;clip:rect(0 0 0 0);overflow:hidden}
-
-  /* Boards area */
-  #boards{
-    position:relative;
-    margin-top:8px;
-    min-height:320px;
-    height:calc(100vh - 180px);
-    overflow:auto;
+  function report(where, err){
+    console.error(`error@${where}`, err);
+    status(`error@${where}: ${(err && err.message) ? err.message : String(err)}`);
   }
 
-  /* Each group as a draggable, resizable window */
-  .board{
-    --ac:#42c6ff;
-    --ac-rgb:66,198,255;
-    border:1px solid rgba(var(--ac-rgb),.55);
-    border-radius:14px;
-    padding:10px;
-    background:linear-gradient(180deg,#11181d,#0d1418);
-    position:absolute;
-    box-shadow:0 0 22px rgba(var(--ac-rgb),.15) inset;
-    min-width:260px;
-    min-height:220px;
-    resize:both;
-    overflow:auto;
-  }
-  .board .title{display:flex;align-items:center;gap:10px;font-weight:900;cursor:move}
-  .board .dot{width:10px;height:10px;border-radius:50%;background:var(--ac);box-shadow:0 0 12px rgba(var(--ac-rgb),.6);border:1px solid rgba(255,255,255,.22)}
-  .board .sub{font:11px;color:#a8bbb4;margin-left:auto}
-  .board .hdr-btns{display:flex;gap:8px;margin-left:6px}
-  .board .colorpick{appearance:none;border:1px solid var(--line);border-radius:6px;width:26px;height:22px;background:#0f1519;cursor:pointer}
+  window.addEventListener('error', e => report('window', e.error || e.message));
+  window.addEventListener('unhandledrejection', e => report('promise', e.reason));
 
-  .padgrid{display:grid;gap:10px;margin-top:8px;width:100%}
-  .pad{
-    user-select:none;touch-action:manipulation;cursor:pointer;height:78px;border-radius:16px;position:relative;overflow:hidden;
-    display:flex;align-items:center;justify-content:center;text-align:center;font-weight:900;letter-spacing:.4px;
-    border:1px solid rgba(var(--ac-rgb),.55);
-    background:
-      radial-gradient(80% 80% at 50% 0%, rgba(var(--ac-rgb),.28), transparent 65%),
-      linear-gradient(180deg, #1c2830, #12191e);
-    box-shadow:
-      0 18px 28px rgba(0,0,0,.45),
-      0 0 16px rgba(var(--ac-rgb),.25) inset,
-      0 2px 0 rgba(255,255,255,.08) inset,
-      0 -14px 26px rgba(0,0,0,.34) inset;
-    padding:6px; outline:none;
-    filter:saturate(1.35) brightness(1.1);
-    font-size:16px; line-height:1.1;
-  }
-  .pad img{max-width:100%;max-height:100%;object-fit:contain;display:block;pointer-events:none}
-  .pad::before{content:""; position:absolute; inset:0; border-radius:16px; pointer-events:none; background:linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,0) 40%); mix-blend-mode:screen; opacity:.85;}
-  .pad .badge{position:absolute;bottom:6px;left:8px;font:11px/1.1 ui-monospace,Menlo,Consolas;color:#c0d5cd;opacity:.95}
-  .pad.playing{transform:translateY(1px); box-shadow:0 12px 22px rgba(0,0,0,.5), 0 0 24px rgba(var(--ac-rgb), .55), 0 -32px 62px rgba(255,255,255,.12) inset; filter:saturate(1.7) brightness(1.25); outline:2px solid rgba(var(--ac-rgb), .75);}
-  .pad.recording{outline:2px solid rgba(255,85,85,.9); box-shadow:0 0 24px rgba(255,85,85,.55), inset 0 -32px 62px rgba(255,255,255,.12);}
-
-  .panel{margin-top:12px;display:none}
-  .panel.show{display:block}
-
-  .kit-grid{display:grid;grid-template-columns:260px 1fr;gap:10px;margin-top:8px}
-  .kit-head{font-size:12px;color:#c9ded6;opacity:.9;padding:6px 0;border-bottom:1px solid var(--line)}
-  #kitRows{display:grid;grid-auto-rows:minmax(56px,auto);gap:8px;margin-top:6px}
-  .kit-row{display:grid;grid-template-columns:260px 1fr;gap:12px;align-items:center;padding:10px;border:1px solid var(--line);border-radius:12px;background:#0f1519}
-  .kit-row .namecell{display:flex;flex-direction:column;gap:6px}
-  .kit-row .padid{font:11px/1.2 ui-monospace,Menlo,Consolas;color:#a8bbb4;opacity:.9}
-  .fileline{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-  .kit-controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-  .kit-controls label{display:flex;gap:6px;align-items:center}
-  .kit-controls select{min-width:160px}
-
-  #sentenceBar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-  #sentenceList{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
-  .chip{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--line);border-radius:999px;background:#0f1519}
-  .chip .dot{width:8px;height:8px;border-radius:50%}
-  .chip .x{border:none;background:transparent;color:#cbdad3;cursor:pointer;font-size:14px;line-height:1}
-  .transcript{margin-top:6px;padding:8px 10px;border:1px dashed var(--line);border-radius:10px;background:#0b1215;color:#cfe0d8;font-size:13px}
-
-  @media (max-width: 980px){
-    .kit-grid{grid-template-columns:1fr}
-    .kit-row{grid-template-columns:1fr}
-  }
-  @media (max-width:520px){
-    #boards{height:auto;min-height:260px}
+  function hexToRgbString(hex){
+    let h = (hex || '').replace('#','');
+    if (!h) return '0,0,0';
+    if (h.length === 3) h = h.split('').map(x => x + x).join('');
+    const n = parseInt(h, 16);
+    const r = (n >> 16) & 255;
+    const g = (n >> 8) & 255;
+    const b = n & 255;
+    return `${r},${g},${b}`;
   }
 
-  /* Ensure group cards wrap their button row so Delete doesn't overhang */
-  #groupList > div{
-    flex-wrap:wrap;
+  // ---- TTS helper (used for sentence play and pad-press fallback) ----
+  function ttsSpeak(text, gapMs){
+    return new Promise((res)=>{
+      if (!('speechSynthesis' in window)){ res(); return; }
+      const s = (text || '').trim();
+      if (!s){ res(); return; }
+      try{ window.speechSynthesis.cancel(); }catch(_){}
+      const utt = new SpeechSynthesisUtterance(s);
+      utt.rate = 1.0;
+      utt.pitch = 1.0;
+      utt.onend = ()=> setTimeout(res, Math.max(0, Number(gapMs) || 0));
+      try{ window.speechSynthesis.speak(utt); }catch(_){ res(); }
+    });
   }
 
-  /* Ensure kit cards wrap their button row so Delete doesn't overhang */
-  #kitList > div{
-    flex-wrap:wrap;
+  /* Local vocabulary (shared key with keyboard) */
+  const VOCAB_KEY = 'medpad_vocabulary';
+  function loadVocab(){
+    try{ return JSON.parse(localStorage.getItem(VOCAB_KEY) || '{}') instanceof Array
+      ? JSON.parse(localStorage.getItem(VOCAB_KEY) || '[]')
+      : JSON.parse(localStorage.getItem(VOCAB_KEY) || '[]'); }
+    catch(_){ return []; }
+  }
+  function saveVocab(list){
+    try{ localStorage.setItem(VOCAB_KEY, JSON.stringify(list.slice(0, 5000))); }
+    catch(_){}
   }
 
-  /* Bigger primary controls (sentence builder + scenes) */
-  #composeBtn,#sentencePlayBtn,#sentenceStopBtn,#sentenceBackBtn,#sentenceClearBtn,#songModeBtn,#chainEditBtn,#chainClearBtn{
-    padding:14px 18px;font-size:16px;border-radius:12px;
-  }
-  .scene-bar .btn{padding:12px 16px;font-size:16px;border-radius:12px}
-  #wpmNum.num,#gapMsNum.num{width:120px;padding:10px 12px;font-size:16px;border-radius:12px}
+  /* ========= DOM refs ========= */
+  const boardsWrap   = $('#boards');
+  const groupsBtn    = $('#groupsBtn');
+  const groupsPanel  = $('#groupsPanel');
+  const groupList    = $('#groupList');
 
-  /* Header buttons bigger + 3D look */
-  #stopAllBtn,
-  #groupsBtn,
-  #toggleSeqBtn,
-  #toggleKitMgrBtn,
-  #toggleKbBtn{
-    padding:14px 22px;
-    font-size:16px;
-    border-radius:14px;
-    min-height:46px;
-    min-width:80px;
-    border:1px solid rgba(255,255,255,.18);
-    background:
-      radial-gradient(120% 140% at 50% 0%, rgba(255,255,255,.18), transparent 55%),
-      linear-gradient(180deg,#1e2a31,#10171c);
-    box-shadow:
-      0 3px 0 rgba(0,0,0,.9),
-      0 0 0 1px rgba(0,0,0,.7) inset,
-      0 0 18px rgba(66,198,255,.25);
-    text-shadow:0 1px 0 rgba(0,0,0,.9);
-  }
-  #stopAllBtn:hover,
-  #groupsBtn:hover,
-  #toggleSeqBtn:hover,
-  #toggleKitMgrBtn:hover,
-  #toggleKbBtn:hover{
-    box-shadow:
-      0 4px 0 rgba(0,0,0,.9),
-      0 0 0 1px rgba(255,255,255,.12) inset,
-      0 0 22px rgba(66,198,255,.4);
-    filter:brightness(1.08);
-  }
-  #stopAllBtn:active,
-  #groupsBtn:active,
-  #toggleSeqBtn:active,
-  #toggleKitMgrBtn:active,
-  #toggleKbBtn:active{
-    transform:translateY(1px);
-    box-shadow:
-      0 1px 0 rgba(0,0,0,.9),
-      0 0 0 1px rgba(0,0,0,.8) inset,
-      0 0 14px rgba(66,198,255,.3);
-  }
+  const newGroupName = $('#newGroupName');
+  const newRows      = $('#newRows');
+  const newCols      = $('#newCols');
+  const newColor     = $('#newColor');
+  const addGroupBtn  = $('#addGroupBtn');
 
-  /* Larger kit manager header controls (Save As / Export / Import) for eye-control use */
-  #kitSaveAs,
-  #kitExport,
-  #kitImportBtn{
-    padding:12px 18px;
-    font-size:16px;
-    border-radius:14px;
-    min-width:110px;
-    min-height:46px;
-  }
+  const kitEditor    = $('#kitEditor');
+  const closeKitBtn  = $('#closeKitBtn');
+  const kitGroupDot  = $('#kitGroupDot');
+  const kitGroupName = $('#kitGroupName');
+  const kitRows      = $('#kitRows');
 
-  /* Larger buttons inside the saved kit list ("save kit window") */
-  #kitList .btn.small{
-    padding:10px 16px;
-    font-size:15px;
-    border-radius:12px;
-    min-width:96px;
-    min-height:44px;
-  }
+  // Sentence Builder
+  const seqPanel         = $('#seqPanel');
+  const toggleSeqBtn     = $('#toggleSeqBtn');
+  const composeBtn       = $('#composeBtn');
+  const sentencePlayBtn  = $('#sentencePlayBtn');
+  const sentenceStopBtn  = $('#sentenceStopBtn');
+  const sentenceBackBtn  = $('#sentenceBackBtn');
+  const sentenceClearBtn = $('#sentenceClearBtn');
+  const sentenceListEl   = $('#sentenceList');
+  const transcriptEl     = $('#transcript');
+  const seqStatus        = $('#seqStatus');
+  const wpmNum           = $('#wpmNum');
+  const gapMsNum         = $('#gapMsNum');
+  const ttsFallbackChk   = $('#ttsFallbackChk');
 
-  /* Keyboard (draggable) */
-  #kbPanel{position:fixed;left:12px;bottom:12px;width:min(1120px,98vw);background:linear-gradient(180deg,#121a1f,#0e1418);border:1px solid var(--line);border-radius:16px;padding:10px;box-shadow:0 22px 44pxrgba(0,0,0,.5);display:none;z-index:50}
-  #kbPanel.show{display:block}
-  #kbBar{display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:move}
-  #kbTitle{font-weight:900}
-  #kbInput{width:100%;padding:12px 14px;border-radius:12px;border:1px solid var(--line);background:#0f1519;color:#e9f6f2;font-size:20px}
+  // Scenes & Chain
+  const sceneBtns    = $$('[data-scene]');
+  const songModeBtn  = $('#songModeBtn');
+  const chainEditBtn = $('#chainEditBtn');
+  const chainClearBtn= $('#chainClearBtn');
+  const chainView    = $('#chainView');
 
-  /* Bigger and more spaced window controls (- and ✕) */
-  .kb-window-controls{display:flex;align-items:center;gap:16px;margin-left:4px}
-  #kbBar .btn{
-    padding:12px 20px;
-    font-size:18px;
-    border-radius:14px;
-    min-width:64px;
-    min-height:48px;
-  }
+  const stopAllBtn   = $('#stopAllBtn');
 
-  .kb-rows{display:flex;flex-direction:column;gap:10px;margin-top:10px}
-  .kb-row{display:flex;gap:10px;flex-wrap:nowrap}
-  .key{
-    flex:0 0 auto;
-    min-width:96px;
-    min-height:96px;
-    padding:14px 16px;
-    border-radius:16px;
-    border:1px solid var(--line);
-    background:#141c1f;
-    color:#e9f6f2;
-    font-weight:800;
-    font-size:28px;
-    letter-spacing:.5px;
-    cursor:pointer;
-  }
-  .key.wide{min-width:140px}
-  .key.backspace{min-width:120px}
+  const saveKitBtn   = $('#saveKitBtn');
+  const loadKitBtn   = $('#loadKitBtn');
+  const loadKitFile  = $('#loadKitFile');
 
-  /* Space row: centered, space bar about half-width, big side buttons */
-  .kb-row-space{justify-content:center}
-  .key.space{
-    flex:0 0 50%;
-    max-width:50%;
-    min-width:0;
-    min-height:96px;
-  }
-  .kb-big-action{
-    flex:0 0 25%;
-    max-width:25%;
-    min-width:0;
-    min-height:96px;
-    font-size:20px;
-    font-weight:800;
-    border-radius:18px;
-  }
-  .kb-big-action span{display:block}
+  const kitMgrPanel  = $('#kitMgrPanel');
+  const kitNameInp   = $('#kitName');
+  const kitSaveAsBtn = $('#kitSaveAs');
+  const kitExportBtn = $('#kitExport');
+  const kitImportBtn = $('#kitImportBtn');
+  const kitImportFile= $('#kitImportFile');
+  const kitList      = $('#kitList');
 
-  .kb-actions{display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap}
-  .kb-pill{font:12px;padding:4px 12px;border:1px solid var(--line);border-radius:999px;color:#c9ded6}
-  .kb-right{margin-left:auto;display:flex;gap:8px;margin-right:12%}
-  .kb-small{font-size:12px}
+  const toggleKitMgrBtn = $('#toggleKitMgrBtn');
 
-  /* Larger, wider Clear button */
-  .kb-clear-large{
-    padding:12px 24px;
-    font-size:18px;
-    border-radius:14px;
-    min-width:160px;
-    min-height:60px;
-  }
+  /* ========= Draggable board windows ========= */
+  function makeBoardWindowDraggable(box, handle, group){
+    if (!boardsWrap || !box || !handle) return;
 
-  @media (max-width:1100px){
-    .kb-row{flex-wrap:wrap}
-  }
+    let dragging   = false;
+    let startX     = 0;
+    let startY     = 0;
+    let startLeft  = 0;
+    let startTop   = 0;
 
-  /* Responsive keyboard sizing for phones and small screens */
-  @media (max-width:768px){
-    #kbPanel{
-      width:96vw;
-      left:2vw;
-      right:2vw;
-      bottom:8px;
-      max-height:70vh;
-      padding:8px;
-      overflow-y:auto;
+    function onDown(e){
+      if (e.button !== undefined && e.button !== 0) return;
+      const target = e.target;
+      if (target.closest('button') || target.closest('input') || target.closest('select') || target.closest('label')) return;
+
+      dragging = true;
+      const crect = boardsWrap.getBoundingClientRect();
+      const rect  = box.getBoundingClientRect();
+      const point = ('touches' in e) ? e.touches[0] : e;
+
+      startX = point.clientX;
+      startY = point.clientY;
+      startLeft = rect.left - crect.left + boardsWrap.scrollLeft;
+      startTop  = rect.top  - crect.top  + boardsWrap.scrollTop;
+
+      document.addEventListener('mousemove', onMove, {passive:false});
+      document.addEventListener('mouseup', onUp);
+      document.addEventListener('touchmove', onMove, {passive:false});
+      document.addEventListener('touchend', onUp);
+      e.preventDefault();
     }
-    #kbInput{
-      font-size:18px;
-      padding:10px 12px;
-    }
-    .key{
-      min-width:72px;
-      min-height:72px;
-      font-size:24px;
-    }
-    .key.backspace,
-    .key.wide{
-      min-width:90px;
-    }
-    .key.space{
-      min-height:72px;
-    }
-    .kb-big-action{
-      min-height:72px;
-      font-size:18px;
-    }
-    #kbBar .btn{
-      min-width:56px;
-      min-height:44px;
-      padding:8px 12px;
-      font-size:16px;
-    }
-    .kb-clear-large{
-      min-width:150px;
-      min-height:56px;
-      font-size:18px;
-      padding:10px 18px;
-    }
-  }
 
-  @media (max-width:480px){
-    #kbPanel{
-      width:98vw;
-      left:1vw;
-      right:1vw;
-      max-height:75vh;
-    }
-    .key{
-      min-width:58px;
-      min-height:58px;
-      font-size:20px;
-    }
-    .key.backspace,
-    .key.wide{
-      min-width:82px;
-    }
-    .kb-big-action{
-      flex:0 0 30%;
-      max-width:30%;
-      min-height:58px;
-      font-size:16px;
-    }
-    .key.space{
-      flex:0 0 40%;
-      max-width:40%;
-      min-height:58px;
-    }
-  }
-</style>
-</head>
-<body>
-  <div class="wrap">
-    <div class="card">
-      <div class="row">
-        <div class="label">AAC Sound Board</div>
-        <span class="spacer"></span>
-        <button class="btn small" id="stopAllBtn">Stop All</button>
-        <button class="btn small" id="groupsBtn">Groups</button>
-        <button class="btn small" id="toggleSeqBtn">Sentence Builder</button>
-        <button class="btn small" id="toggleKitMgrBtn">Kits</button>
-        <button class="btn small" id="toggleKbBtn">Keyboard</button>
-        <span class="pill" id="status">loading…</span>
-      </div>
+    function onMove(e){
+      if (!dragging) return;
+      const point = ('touches' in e) ? e.touches[0] : e;
+      const dx = point.clientX - startX;
+      const dy = point.clientY - startY;
 
-      <div id="boards"></div>
+      let nx = startLeft + dx;
+      let ny = startTop  + dy;
 
-      <div id="groupsPanel" class="panel">
-        <div class="row" style="gap:12px;flex-wrap:wrap">
-          <div class="label">Groups</div>
-          <span class="spacer"></span>
-          <input id="newGroupName" placeholder="Group name (e.g., Nouns)" style="width:220px">
-          <label class="small">Rows <input id="newRows" type="number" min="1" max="12" value="4" class="num"></label>
-          <label class="small">Cols <input id="newCols" type="number" min="1" max="12" value="4" class="num"></label>
-          <label class="small">Color <input id="newColor" type="color" value="#42c6ff" style="height:28px;border:1px solid var(--line);border-radius:6px;background:#0f1519"></label>
-          <button class="btn small" id="addGroupBtn">Add Group</button>
-          <span class="small muted">Presets:</span>
-          <button class="btn small" data-preset="3x3">3×3</button>
-          <button class="btn small" data-preset="4x4">4×4</button>
-          <button class="btn small" data-preset="5x5">5×5</button>
-          <button class="btn small" data-preset="10x10">10×10</button>
-        </div>
-        <div id="groupList" class="small" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:10px;margin-top:6px"></div>
-      </div>
+      nx = Math.max(4, nx);
+      ny = Math.max(4, ny);
 
-      <div id="kitEditor" class="panel">
-        <div class="row" style="flex-wrap:wrap;gap:10px">
-          <div class="label">Kit Editor</div>
-          <div id="kitGroupBadge" class="row small" style="gap:8px">
-            <span id="kitGroupDot" class="dot" style="width:10px;height:10px;border-radius:50%"></span>
-            <span id="kitGroupName" class="small muted">—</span>
-          </div>
-          <span class="spacer"></span>
-          <button class="btn small" id="closeKitBtn">Close Editor</button>
-          <button class="btn small" id="saveKitBtn">Export .json</button>
-          <button class="btn small" id="loadKitBtn">Import .json</button>
-          <input type="file" id="loadKitFile" accept=".json" hidden>
-        </div>
-        <div class="kit-grid">
-          <div class="kit-head">Name / Sample / Image</div>
-          <div class="kit-head">Mode & Basic Controls</div>
-        </div>
-        <div id="kitRows"></div>
-      </div>
+      box.style.left = nx + 'px';
+      box.style.top  = ny + 'px';
 
-      <div id="seqPanel" class="panel">
-        <div id="sentenceBar" class="row" style="flex-wrap:wrap">
-          <button class="btn small" id="composeBtn" aria-pressed="false">Compose: Off</button>
-          <button class="btn small" id="sentencePlayBtn" aria-pressed="false">Play</button>
-          <button class="btn small" id="sentenceStopBtn">Stop</button>
-          <button class="btn small" id="sentenceBackBtn">Backspace</button>
-          <button class="btn small" id="sentenceClearBtn">Clear</button>
-          <label class="small">WPM <input id="wpmNum" class="num" type="number" min="20" max="300" step="1" value="120"></label>
-          <label class="small">Gap (ms) <input id="gapMsNum" class="num" type="number" min="0" max="2000" step="10" value="250"></label>
-          <label class="small"><input id="ttsFallbackChk" type="checkbox" checked> TTS if empty</label>
-          <span class="spacer"></span>
-          <span class="pill" id="seqStatus">ready</span>
-        </div>
-        <div id="sentenceList"></div>
-        <div id="transcript" class="transcript small">—</div>
-
-        <div class="row scene-bar" style="margin-top:10px">
-          <div class="muted">Scenes:</div>
-          <button class="btn small" data-scene="1">A1</button>
-          <button class="btn small" data-scene="2">A2</button>
-          <button class="btn small" data-scene="3">A3</button>
-          <button class="btn small" data-scene="4">A4</button>
-          <button class="btn small" data-scene="5">B1</button>
-          <button class="btn small" data-scene="6">B2</button>
-          <button class="btn small" data-scene="7">B3</button>
-          <button class="btn small" data-scene="8">B4</button>
-          <span class="spacer"></span>
-          <button class="btn small" id="songModeBtn" aria-pressed="false">Story Mode</button>
-          <button class="btn small" id="chainEditBtn" aria-pressed="false">Chain Edit</button>
-          <button class="btn small" id="chainClearBtn">Clear Chain</button>
-        </div>
-        <div class="small"><span class="muted">Chain:</span> <span id="chainView" class="muted">—</span></div>
-      </div>
-
-      <div id="kitMgrPanel" class="panel">
-        <div class="row">
-          <div class="label">Kits</div>
-          <span class="spacer"></span>
-          <input id="kitName" placeholder="Kit name" class="small" style="padding:6px 8px;border:1px solid var(--line);background:#0f1519;color:#e9f6f2;width:220px">
-          <button class="btn small" id="kitSaveAs">Save As</button>
-          <button class="btn small" id="kitExport">Export</button>
-          <button class="btn small" id="kitImportBtn">Import</button>
-          <input type="file" id="kitImportFile" accept=".json" hidden>
-        </div>
-        <div class="small muted" style="margin:4px 0 10px">Local library saves groups, colors, pads, sentences, scenes & chain.</div>
-        <!-- WIDTH FIX APPLIED HERE: minmax(320px,1fr) -->
-        <div id="kitList" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px"></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Floating Large-Button Keyboard -->
-  <div id="kbPanel" role="dialog" aria-label="Keyboard">
-    <div id="kbBar">
-      <div id="kbTitle">Keyboard</div>
-      <span class="kb-pill" id="kbLinkPill" aria-pressed="true">Link to Sentence</span>
-      <span class="spacer"></span>
-      <div class="kb-window-controls">
-        <button class="btn" id="kbMinBtn" title="Minimize">—</button>
-        <button class="btn" id="kbCloseBtn" title="Close">✕</button>
-      </div>
-    </div>
-    <input id="kbInput" type="text" placeholder="Type here…">
-    <div class="kb-rows" id="kbRows"></div>
-    <div class="kb-actions">
-      <span class="kb-small muted">Saved as local vocabulary; caregivers can map words to pads later.</span>
-      <span class="kb-right">
-        <button class="btn kb-clear-large" id="kbClear">Clear</button>
-      </span>
-    </div>
-  </div>
-
-  <script src="js/soundboard.js" defer
-    onerror="(function(){var s=document.createElement('script');s.src='./soundboard.js';s.defer=true;document.body.appendChild(s);})();"></script>
-
-  <script>
-  (function(){
-    const $ = sel => document.querySelector(sel);
-
-    const kbPanel = $('#kbPanel');
-    const kbRows  = $('#kbRows');
-    const kbInput = $('#kbInput');
-    const kbLinkPill = $('#kbLinkPill');
-    const toggleKbBtn = $('#toggleKbBtn');
-
-    window.MedPadAPI = window.MedPadAPI || {};
-    window.MedPadAPI.addWordToken = function(text){
-      const t = (text||'').trim();
-      if(!t) return;
-
-      if (typeof window.sentenceAddToken === 'function'){
-        window.sentenceAddToken({text:t, tts:true, from:'keyboard'});
-        return;
-      }
-      if (window.MED_SENTENCE && typeof window.MED_SENTENCE.addToken === 'function'){
-        window.MED_SENTENCE.addToken({text:t, tts:true, from:'keyboard'});
-        return;
+      if (group){
+        group.win = group.win || {};
+        group.win.x = nx;
+        group.win.y = ny;
       }
 
-      window.sentenceTokens = window.sentenceTokens || [];
-      const token = { id:'k'+Date.now(), text:t, tts:true, from:'keyboard' };
-      window.sentenceTokens.push(token);
+      e.preventDefault();
+    }
 
-      const list = $('#sentenceList');
-      if (list){
-        const chip = document.createElement('div');
-        chip.className = 'chip';
-        chip.dataset.id = token.id;
-        chip.innerHTML = '<span class="dot" style="background:#5DD7D0"></span><span>'+escapeHtml(t)+'</span><button class="x" aria-label="remove">×</button>';
-        chip.querySelector('.x').onclick = ()=>{
-          chip.remove();
-          window.sentenceTokens = (window.sentenceTokens||[]).filter(x=>x.id!==token.id);
-          updateTranscript();
-        };
-        list.appendChild(chip);
-        updateTranscript();
-      }
+    function onUp(){
+      dragging = false;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('touchmove', onMove);
+      document.removeEventListener('touchend', onUp);
+    }
 
-      function updateTranscript(){
-        const tr = $('#transcript');
-        if(tr && window.sentenceTokens){
-          tr.textContent = window.sentenceTokens.map(x=>x.text).join(' ');
+    handle.addEventListener('mousedown', onDown);
+    handle.addEventListener('touchstart', onDown, {passive:false});
+  }
+
+  /* ========= audio ========= */
+  const actx = new (window.AudioContext || window.webkitAudioContext)();
+  const master = actx.createGain();
+  master.gain.value = 1;
+  master.connect(actx.destination);
+
+  window.addEventListener('pointerdown', async function once(){
+    try{ await actx.resume(); }catch(_){}
+    window.removeEventListener('pointerdown', once);
+  }, {once:true});
+
+  function makePadChain(){
+    const g = actx.createGain();
+    const p = actx.createStereoPanner();
+    const f = actx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.value = 18000;
+    f.Q.value = 0.0001;
+    const a = actx.createGain();
+    g.connect(f).connect(p).connect(a).connect(master);
+    return {g, p, f, a};
+  }
+
+  /* ========= data model ========= */
+  const PadMode = Object.freeze({
+    RETRIGGER    : 'retrigger',
+    TOGGLE_START : 'toggle_start',
+    TOGGLE_RESUME: 'toggle_resume',
+    RECORD       : 'record'
+  });
+
+  function makePad(i){
+    const nm = `Pad ${String(i+1).padStart(2,'0')}`;
+    return {
+      name   : nm,
+      phrase : nm,
+      buffer : null,
+      b64    : null,
+      duration: 0,
+      img    : null,
+
+      gain  : 1.0,
+      pan   : 0.0,
+      filterType: 'lowpass',
+      cutoff: 18000,
+      q     : 0.0001,
+      env   : {a:0.005,d:0.02,s:1.0,r:0.04},
+      tune  : 0,
+      fine  : 0,
+      loop  : false,
+      reverse:false,
+      choke : 0,
+
+      mode    : PadMode.RETRIGGER,
+      voices  : [],
+      toggleOn: false,
+      savedOffset: 0,
+      voice   : null
+    };
+  }
+
+  const DEFAULT_COLORS = [
+    '#30f39b','#42c6ff','#ffcc66','#ff6961',
+    '#c38bff','#68e2b6','#ffa3a3','#a0f','#3cf','#7dff6b'
+  ];
+
+  let NEXT_GROUP_ID = 1;
+
+  function makeGroup(name, rows, cols, color){
+    rows = Math.max(1, Math.min(12, rows|0));
+    cols = Math.max(1, Math.min(12, cols|0));
+    const count = rows * cols;
+    return {
+      id   : 'g' + (NEXT_GROUP_ID++),
+      name : name || 'Group',
+      rows,
+      cols,
+      color: color || DEFAULT_COLORS[(NEXT_GROUP_ID-2) % DEFAULT_COLORS.length],
+      pads : Array.from({length:count}, (_,i)=> makePad(i)),
+      win  : null
+    };
+  }
+
+  const App = {
+    groups  : [],
+    visible : new Set(),
+    editGid : null,
+    sentence: []
+  };
+
+  /* ========= boards ========= */
+  function renderBoards(){
+    if (!boardsWrap) return;
+    boardsWrap.innerHTML = '';
+    let idx = 0;
+
+    for (const g of App.groups){
+      if (!App.visible.has(g.id)) continue;
+
+      const board = document.createElement('div');
+      board.className = 'board';
+      board.style.setProperty('--ac', g.color);
+      board.style.setProperty('--ac-rgb', hexToRgbString(g.color));
+      board.dataset.groupId = g.id;
+
+      const grid = document.createElement('div');
+      grid.className = 'padgrid';
+      grid.style.gridTemplateColumns = `repeat(${g.cols}, minmax(64px, 1fr))`;
+      grid.dataset.groupId = g.id;
+
+      for (let i=0;i<g.pads.length;i++){
+        const p = g.pads[i];
+        const el = document.createElement('button');
+        el.className = 'pad';
+        el.title = (p.phrase && p.phrase.trim()) || p.name;
+
+        if (p.img){
+          el.innerHTML = `<img alt="${p.name}" src="${p.img}"><div class="badge">${i+1}</div>`;
+        }else{
+          el.innerHTML = `<div>${p.name}</div><div class="badge">${i+1}</div>`;
         }
+
+        el.addEventListener('mousedown', ()=> onPadPress(g.id, i, 1.0));
+        el.addEventListener('touchstart', (e)=>{
+          e.preventDefault();
+          onPadPress(g.id, i, 1.0);
+        }, {passive:false});
+
+        grid.appendChild(el);
       }
-      function escapeHtml(s){ return s.replace(/[&<>"']/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m])); }
+
+      const hdr = document.createElement('div');
+      hdr.className = 'title';
+
+      const dot = document.createElement('div');
+      dot.className = 'dot';
+
+      const name = document.createElement('div');
+      name.textContent = g.name;
+
+      const colorPick = document.createElement('input');
+      colorPick.type = 'color';
+      colorPick.value = g.color;
+      colorPick.className = 'colorpick';
+      colorPick.title = 'Pick group color';
+      colorPick.oninput = (e)=>{
+        g.color = e.target.value || g.color;
+        renderBoards();
+        renderGroupList();
+        if (App.editGid === g.id) updateEditorBadge(g);
+      };
+
+      const btns = document.createElement('div');
+      btns.className = 'hdr-btns';
+
+      const editBtn = document.createElement('button');
+      editBtn.className = 'btn small';
+      editBtn.textContent = (App.editGid === g.id && kitEditor.classList.contains('show')) ? 'Close' : 'Edit';
+      editBtn.onclick = ()=> toggleKitForGroup(g.id);
+
+      btns.appendChild(colorPick);
+      btns.appendChild(editBtn);
+
+      const sub = document.createElement('div');
+      sub.className = 'sub';
+      sub.textContent = `(${g.rows}×${g.cols})`;
+
+      hdr.appendChild(dot);
+      hdr.appendChild(name);
+      hdr.appendChild(btns);
+      hdr.appendChild(sub);
+
+      board.appendChild(hdr);
+      board.appendChild(grid);
+      boardsWrap.appendChild(board);
+
+      if (!g.win) g.win = {};
+      if (typeof g.win.x !== 'number' || typeof g.win.y !== 'number'){
+        const col = idx % 2;
+        const row = Math.floor(idx / 2);
+        const baseX = 12 + col * 360;
+        const baseY = 12 + row * 260;
+        g.win.x = baseX;
+        g.win.y = baseY;
+      }
+
+      board.style.left = g.win.x + 'px';
+      board.style.top  = g.win.y + 'px';
+
+      if (typeof g.win.w === 'number' && g.win.w > 0){
+        board.style.width = g.win.w + 'px';
+      }
+      if (typeof g.win.h === 'number' && g.win.h > 0){
+        board.style.height = g.win.h + 'px';
+      }
+
+      if (window.ResizeObserver){
+        const ro = new ResizeObserver(entries=>{
+          for (const entry of entries){
+            const rect = entry.target.getBoundingClientRect();
+            g.win = g.win || {};
+            g.win.w = rect.width;
+            g.win.h = rect.height;
+          }
+        });
+        ro.observe(board);
+      }
+
+      makeBoardWindowDraggable(board, hdr, g);
+      idx++;
+    }
+  }
+
+  function flashPad(gid, idx){
+    const boards = Array.from(document.querySelectorAll('.padgrid'));
+    const board = boards.find(pg => pg.dataset.groupId === gid);
+    if (!board) return;
+    const el = board.children[idx];
+    if (!el) return;
+    el.classList.add('playing');
+    setTimeout(()=> el.classList.remove('playing'), 120);
+  }
+
+  function setPadRecordingIndicator(gid, idx, on){
+    const boards = Array.from(document.querySelectorAll('.padgrid'));
+    const board = boards.find(pg => pg.dataset.groupId === gid);
+    if (!board) return;
+    const el = board.children[idx];
+    if (el) el.classList.toggle('recording', !!on);
+  }
+
+  /* ========= groups panel ========= */
+  function renderGroupList(){
+    groupList.innerHTML = '';
+    for (const g of App.groups){
+      const card = document.createElement('div');
+      card.style.cssText = 'border:1px solid var(--line);border-radius:10px;padding:10px;background:#0f1519;display:flex;gap:12px;align-items:center;flex-wrap:wrap';
+
+      const dot = document.createElement('div');
+      dot.style.cssText = `width:12px;height:12px;border-radius:50%;background:${g.color};box-shadow:0 0 10px ${g.color}88;border:1px solid rgba(255,255,255,.22)`;
+
+      const left = document.createElement('div');
+      left.style.cssText = 'display:flex;flex-direction:column;gap:6px;flex:1';
+      left.innerHTML = `<div style="font-weight:700">${g.name}</div><div class="muted small">${g.rows}×${g.cols} • ${g.pads.length} pads</div>`;
+
+      const vis = document.createElement('label');
+      vis.className = 'small';
+      vis.innerHTML = `<input type="checkbox" ${App.visible.has(g.id) ? 'checked' : ''}> Visible`;
+      vis.querySelector('input').onchange = (e)=>{
+        const on = e.target.checked;
+        if (on) App.visible.add(g.id);
+        else App.visible.delete(g.id);
+        renderBoards();
+      };
+
+      const colorLabel = document.createElement('label');
+      colorLabel.className = 'small';
+      colorLabel.innerHTML = `Color <input type="color" value="${g.color}" style="height:26px;margin-left:6px;border:1px solid var(--line);border-radius:6px;background:#0f1519">`;
+      colorLabel.querySelector('input').oninput = (e)=>{
+        g.color = e.target.value || g.color;
+        renderBoards();
+        renderGroupList();
+        if (App.editGid === g.id) updateEditorBadge(g);
+      };
+
+      const renameBtn = document.createElement('button');
+      renameBtn.className = 'btn small ghost';
+      renameBtn.textContent = 'Rename';
+      renameBtn.onclick = ()=>{
+        const nv = prompt('Rename group', g.name);
+        if (!nv) return;
+        g.name = nv;
+        renderGroupList();
+        renderBoards();
+        if (App.editGid === g.id) updateEditorBadge(g);
+      };
+
+      const resizeBtn = document.createElement('button');
+      resizeBtn.className = 'btn small ghost';
+      resizeBtn.textContent = 'Resize';
+      resizeBtn.onclick = ()=>{
+        const rv = prompt('Rows (1–12)', g.rows);
+        const cv = prompt('Cols (1–12)', g.cols);
+        const r = Number(rv);
+        const c = Number(cv);
+        if (!r || !c) return;
+        resizeGroup(g, r, c);
+        renderBoards();
+        if (App.editGid === g.id) rebuildEditor();
+      };
+
+      const editBtn = document.createElement('button');
+      editBtn.className = 'btn small';
+      editBtn.textContent = (App.editGid === g.id && kitEditor.classList.contains('show')) ? 'Close Editor' : 'Edit Pads';
+      editBtn.onclick = ()=> toggleKitForGroup(g.id);
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn small ghost';
+      delBtn.textContent = 'Delete';
+      delBtn.onclick = ()=>{
+        if (!confirm(`Delete group "${g.name}"?`)) return;
+        App.groups = App.groups.filter(x => x.id !== g.id);
+        App.visible.delete(g.id);
+        if (App.editGid === g.id){
+          App.editGid = null;
+          kitEditor.classList.remove('show');
+        }
+        renderGroupList();
+        renderBoards();
+        rebuildEditor();
+      };
+
+      const right = document.createElement('div');
+      right.style.display = 'flex';
+      right.style.gap = '8px';
+      right.style.alignItems = 'center';
+      right.appendChild(vis);
+      right.appendChild(colorLabel);
+      right.appendChild(renameBtn);
+      right.appendChild(resizeBtn);
+      right.appendChild(editBtn);
+      right.appendChild(delBtn);
+
+      card.appendChild(dot);
+      card.appendChild(left);
+      card.appendChild(right);
+      groupList.appendChild(card);
+    }
+  }
+
+  function resizeGroup(g, rows, cols){
+    rows = Math.max(1, Math.min(12, rows|0));
+    cols = Math.max(1, Math.min(12, cols|0));
+    const old = g.pads.slice(0);
+    const count = rows * cols;
+    const out = Array.from({length:count}, (_,i)=> old[i] ? old[i] : makePad(i));
+    g.rows = rows;
+    g.cols = cols;
+    g.pads = out;
+  }
+
+  groupsBtn.onclick      = ()=> groupsPanel.classList.toggle('show');
+  toggleSeqBtn.onclick   = ()=> seqPanel.classList.toggle('show');
+  toggleKitMgrBtn.onclick= ()=> kitMgrPanel.classList.toggle('show');
+
+  document.querySelectorAll('[data-preset]').forEach(b=>{
+    b.onclick = ()=>{
+      const [r,c] = b.dataset.preset.split('x').map(n => Number(n));
+      newRows.value = String(r);
+      newCols.value = String(c);
+    };
+  });
+
+  addGroupBtn.onclick = ()=>{
+    const name = (newGroupName.value || '').trim() || 'Group';
+    const r = Math.max(1, Math.min(12, Number(newRows.value || 4)));
+    const c = Math.max(1, Math.min(12, Number(newCols.value || 4)));
+    const col = newColor.value || DEFAULT_COLORS[(NEXT_GROUP_ID-1) % DEFAULT_COLORS.length];
+    const g = makeGroup(name, r, c, col);
+    App.groups.push(g);
+    App.visible.add(g.id);
+    newGroupName.value = '';
+    renderGroupList();
+    renderBoards();
+    status(`Added group "${g.name}"`);
+  };
+
+  /* ========= audio play + record ========= */
+  function reverseBuffer(buf){
+    const rev = actx.createBuffer(buf.numberOfChannels, buf.length, buf.sampleRate);
+    for (let c=0;c<buf.numberOfChannels;c++){
+      const src = buf.getChannelData(c);
+      const dst = rev.getChannelData(c);
+      for (let i=0,j=src.length-1;i<src.length;i++,j--){
+        dst[i] = src[j];
+      }
+    }
+    return rev;
+  }
+
+  function stopPadVoices(p, all=true){
+    if (all){
+      while (p.voices.length){
+        try{ p.voices.pop().src.stop(); }catch(_){}
+      }
+    }else if (p.voice){
+      try{ p.voice.src.stop(); }catch(_){}
+      p.voice = null;
+    }
+  }
+
+  function effectiveRate(p){
+    return Math.pow(2, (p.tune + (p.fine/100)) / 12);
+  }
+
+  function triggerRetrigger(p, vel=1){
+    if (!p.buffer) return;
+    const {g,p:pan,f,a} = makePadChain();
+    g.gain.value        = p.gain * vel;
+    pan.pan.value       = p.pan;
+    f.type              = p.filterType;
+    f.frequency.value   = p.cutoff;
+    f.Q.value           = p.q;
+
+    const src = actx.createBufferSource();
+    src.buffer = p.reverse ? reverseBuffer(p.buffer) : p.buffer;
+    src.loop   = !!p.loop;
+
+    const rate = effectiveRate(p);
+    src.playbackRate.value = rate;
+
+    const now = actx.currentTime;
+    const {a:att,d:dec,s:sus,r:rel} = p.env;
+
+    a.gain.cancelScheduledValues(now);
+    a.gain.setValueAtTime(0, now);
+    a.gain.linearRampToValueAtTime(1, now + att);
+    a.gain.linearRampToValueAtTime(sus, now + att + dec);
+
+    const estDur = Math.max(0.02, p.buffer.duration / rate);
+    a.gain.setTargetAtTime(0, now + estDur, Math.max(0.001, rel));
+
+    src.connect(g);
+    src.start(now);
+
+    p.voices.push({src, a});
+    src.onended = ()=>{
+      p.voices = p.voices.filter(v => v.src !== src);
+    };
+  }
+
+  function togglePad(p, resume){
+    if (!p.buffer) return;
+
+    if (p.toggleOn){
+      const v = p.voice;
+      if (v){
+        const now = actx.currentTime;
+        if (resume){
+          const elapsed = (now - v.startTime) * v.playbackRate;
+          const newOff = v.startOffset + elapsed;
+          p.savedOffset = p.loop
+            ? (newOff % p.buffer.duration)
+            : Math.min(newOff, p.buffer.duration);
+        }else{
+          p.savedOffset = 0;
+        }
+        try{ v.src.stop(); }catch(_){}
+      }
+      p.toggleOn = false;
+      p.voice    = null;
+      return;
+    }
+
+    const {g,p:pan,f,a} = makePadChain();
+    g.gain.value        = p.gain;
+    pan.pan.value       = p.pan;
+    f.type              = p.filterType;
+    f.frequency.value   = p.cutoff;
+    f.Q.value           = p.q;
+
+    const src = actx.createBufferSource();
+    src.buffer = p.reverse ? reverseBuffer(p.buffer) : p.buffer;
+    src.loop   = !!p.loop;
+
+    const rate = effectiveRate(p);
+    src.playbackRate.value = rate;
+
+    const now = actx.currentTime;
+    const {a:att,d:dec,s:sus} = p.env;
+
+    a.gain.cancelScheduledValues(now);
+    a.gain.setValueAtTime(0, now);
+    a.gain.linearRampToValueAtTime(1, now + att);
+    a.gain.linearRampToValueAtTime(sus, now + att + dec);
+
+    const startOffset = resume ? (p.savedOffset || 0) : 0;
+
+    src.connect(g);
+    try{
+      src.start(now, Math.min(startOffset, Math.max(0, src.buffer.duration - 0.001)));
+    }catch(e){
+      try{ src.start(now); }catch(_){}
+    }
+
+    p.toggleOn = true;
+    p.voice = {
+      src,
+      a,
+      startTime   : now,
+      startOffset : startOffset,
+      playbackRate: rate
     };
 
-    const VOCAB_KEY = 'medpad_vocabulary';
-    function loadVocab(){ try{ return JSON.parse(localStorage.getItem(VOCAB_KEY))||[] }catch(e){ return [] } }
-    function saveVocab(list){ localStorage.setItem(VOCAB_KEY, JSON.stringify(list.slice(0,5000))) }
+    src.onended = ()=>{
+      if (p.voice && p.voice.src === src){
+        p.toggleOn    = false;
+        p.voice       = null;
+        p.savedOffset = 0;
+      }
+    };
+  }
 
-    const ROWS = [
-      "Q W E R T Y U I O P",
-      "A S D F G H J K L",
-      "SHIFT Z X C V B N M ⌫",
-      "SPACE"
-    ];
-    let shift = false;
-    function build(){
-      kbRows.innerHTML = '';
-      ROWS.forEach((row)=>{
-        const div = document.createElement('div');
-        div.className = 'kb-row';
+  /* mic record per pad */
+  let micStream = null;
+  const padRecorders = new Map();
 
-        if (row === 'SPACE'){
-          div.classList.add('kb-row-space');
+  document.addEventListener('pointerdown', async function first(){
+    try{
+      if (!micStream){
+        micStream = await navigator.mediaDevices.getUserMedia({audio:true});
+      }
+    }catch(_){}
+    document.removeEventListener('pointerdown', first);
+  }, {once:true});
 
-          const addSentenceBtn = document.createElement('button');
-          addSentenceBtn.id = 'kbAddSentence';
-          addSentenceBtn.className = 'btn kb-big-action';
-          addSentenceBtn.innerHTML = '<span>Add to</span><span>Sentence</span>';
-          addSentenceBtn.addEventListener('click',()=>{
-            const t = kbInput.value.trim();
-            if(!t) return;
-            window.MedPadAPI.addWordToken(t);
-            kbInput.value = '';
-          });
-          div.appendChild(addSentenceBtn);
+  async function ensureMic(){
+    if (micStream) return micStream;
+    micStream = await navigator.mediaDevices.getUserMedia({audio:true});
+    return micStream;
+  }
 
-          const spaceBtn = document.createElement('button');
-          spaceBtn.className = 'key space';
-          spaceBtn.textContent = 'Space';
-          spaceBtn.addEventListener('click',()=> press('SPACE'));
-          div.appendChild(spaceBtn);
+  // onStopCb is optional callback invoked when recording stops
+  async function startPadRecording(p, gid, idx, onStopCb){
+    try{
+      const stream = await ensureMic();
+      const rec = new MediaRecorder(stream);
+      const state = {rec, chunks:[], active:true};
+      padRecorders.set(p, state);
 
-          const addVocabBtn = document.createElement('button');
-          addVocabBtn.id = 'kbAddVocab';
-          addVocabBtn.className = 'btn kb-big-action';
-          addVocabBtn.innerHTML = '<span>Add to</span><span>Vocabulary</span>';
-          addVocabBtn.addEventListener('click',()=>{
-            const t = kbInput.value.trim();
-            if(!t) return;
-            const list = loadVocab();
-            if(!list.includes(t)) list.unshift(t);
-            saveVocab(list);
-          });
-          div.appendChild(addVocabBtn);
-
-          kbRows.appendChild(div);
-          return;
+      rec.ondataavailable = e => state.chunks.push(e.data);
+      rec.onstop = async ()=>{
+        state.active = false;
+        try{
+          const blob = new Blob(state.chunks, {type:'audio/webm'});
+          const arr  = await blob.arrayBuffer();
+          const buf  = await actx.decodeAudioData(arr.slice(0));
+          p.buffer   = buf;
+          p.duration = buf.duration;
+          p.b64      = bufferToBase64Wav(buf);
+          p.toggleOn = false;
+          p.savedOffset = 0;
+          p.voice    = null;
+          renderBoards();
+          status(`Recorded → ${p.name}`);
+        }catch(e){
+          report('padRecDecode', e);
         }
+        setPadRecordingIndicator(gid, idx, false);
+        if (typeof onStopCb === 'function'){
+          try{ onStopCb(); }catch(_){}
+        }
+      };
 
-        row.split(' ').forEach(k=>{
-          const btn = document.createElement('button');
-          btn.className = 'key';
-          if(k==='SPACE'){ btn.classList.add('space'); btn.textContent = 'Space'; }
-          else if(k==='⌫'){ btn.classList.add('backspace'); btn.textContent = 'Backspace'; }
-          else if(k==='SHIFT'){ btn.classList.add('wide'); btn.textContent = shift ? 'Shift ↑' : 'Shift'; }
-          else { btn.textContent = shift ? k : k.toLowerCase(); }
-          btn.addEventListener('click',()=> press(k));
-          div.appendChild(btn);
-        });
-        kbRows.appendChild(div);
+      rec.start();
+      setPadRecordingIndicator(gid, idx, true);
+      status(`Recording ${p.name}…`);
+    }catch(e){
+      report('padRecStart', e);
+    }
+  }
+
+  function stopPadRecording(p, gid, idx){
+    const st = padRecorders.get(p);
+    if (st && st.active){
+      try{ st.rec.stop(); }catch(_){}
+      padRecorders.delete(p);
+    }
+  }
+
+  /* ========= sentence builder ========= */
+  let composeMode     = false;
+  let playingSentence = false;
+  let playAbort       = false;
+  let currentTimeout  = null;
+
+  function setCompose(on){
+    composeMode = !!on;
+    composeBtn.setAttribute('aria-pressed', composeMode ? 'true' : 'false');
+    composeBtn.textContent = 'Compose: ' + (composeMode ? 'On' : 'Off');
+    status(composeMode ? 'Compose: tap pads to append words' : 'Compose off');
+  }
+
+  composeBtn.onclick = ()=> setCompose(!composeMode);
+
+  function sentenceToText(arr){
+    return arr.map(t => (t.text && t.text.trim()) || t.name || '—').join(' ');
+  }
+
+  function renderSentence(){
+    sentenceListEl.innerHTML = '';
+    const s = App.sentence;
+
+    for (let i=0;i<s.length;i++){
+      const t = s[i];
+
+      const chip = document.createElement('div');
+      chip.className = 'chip';
+
+      const dot = document.createElement('div');
+      dot.className = 'dot';
+      dot.style.background = t.color || '#42c6ff';
+
+      const label = document.createElement('div');
+      label.textContent = (t.text && t.text.trim()) || t.name;
+
+      const x = document.createElement('button');
+      x.className = 'x';
+      x.textContent = '×';
+      x.title = 'Remove';
+      x.onclick = ()=>{
+        App.sentence.splice(i,1);
+        renderSentence();
+      };
+
+      chip.appendChild(dot);
+      chip.appendChild(label);
+      chip.appendChild(x);
+      sentenceListEl.appendChild(chip);
+    }
+
+    transcriptEl.textContent = s.length ? sentenceToText(s) : '—';
+  }
+
+  function msFromWPM(wpm){
+    wpm = Math.max(1, Number(wpm) || 120);
+    return Math.round(60000 / wpm);
+  }
+
+  function wpmFromMs(ms){
+    ms = Math.max(1, Number(ms) || 250);
+    return Math.max(1, Math.round(60000 / ms));
+  }
+
+  async function playWordToken(tok){
+    const g = App.groups.find(x => x.id === tok.gid);
+    const p = g ? g.pads[tok.idx] : null;
+    const spoken  = (tok.text && tok.text.trim()) || tok.name || 'blank';
+    const useTTS  = (!p || !p.buffer) && ttsFallbackChk.checked && 'speechSynthesis' in window;
+    const gap     = Number(gapMsNum.value || 250);
+
+    if (p && p.buffer){
+      const rate  = Math.pow(2, (p.tune + (p.fine/100)) / 12);
+      const durMs = Math.max(10, Math.round((p.buffer.duration / rate) * 1000));
+      triggerRetrigger(p, 1.0);
+      return new Promise(res=>{
+        currentTimeout = setTimeout(res, durMs + gap);
+      });
+    }else if (useTTS){
+      return ttsSpeak(spoken, gap);
+    }else{
+      return new Promise(res=>{
+        currentTimeout = setTimeout(res, gap);
       });
     }
-    function press(k){
-      if(k==='SPACE'){ kbInput.value += ' '; maybeLink(); return; }
-      if(k==='⌫'){ kbInput.value = kbInput.value.slice(0,-1); return; }
-      if(k==='SHIFT'){ shift = !shift; build(); return; }
-      kbInput.value += (shift ? k : k.toLowerCase());
-      maybeLink();
+  }
+
+  async function playSentence(arr){
+    if (!arr || arr.length === 0) return;
+    playingSentence = true;
+    playAbort       = false;
+    if (seqStatus) seqStatus.textContent = 'playing';
+
+    for (let i=0;i<arr.length;i++){
+      if (playAbort) break;
+      await playWordToken(arr[i]);
     }
-    function maybeLink(){
-      if(kbLinkPill.getAttribute('aria-pressed')==='true'){
-        const parts = kbInput.value.trim().split(/\s+/);
-        if (kbInput.value.endsWith(' ') && parts.length){
-          const word = parts[parts.length-1];
-          if(word) window.MedPadAPI.addWordToken(word);
+
+    playingSentence = false;
+    if (seqStatus) seqStatus.textContent = 'ready';
+  }
+
+  function stopSentence(){
+    playAbort = true;
+    if (currentTimeout){
+      clearTimeout(currentTimeout);
+      currentTimeout = null;
+    }
+    try{
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    }catch(_){}
+    playingSentence = false;
+    if (seqStatus) seqStatus.textContent = 'ready';
+  }
+
+  sentencePlayBtn.onclick = async ()=>{
+    if (playingSentence){
+      stopSentence();
+      return;
+    }
+    if (songMode){
+      if (chain.length === 0) chain = defaultChain();
+      for (let i=0;i<chain.length;i++){
+        if (playAbort) break;
+        const idx = chain[i];
+        ensureScene(idx);
+        await playSentence(scenes[idx].sentence);
+      }
+      playingSentence = false;
+      if (seqStatus) seqStatus.textContent = 'ready';
+      return;
+    }
+    await playSentence(App.sentence);
+  };
+
+  sentenceStopBtn.onclick = stopSentence;
+
+  sentenceBackBtn.onclick = ()=>{
+    App.sentence.pop();
+    renderSentence();
+  };
+
+  sentenceClearBtn.onclick = ()=>{
+    App.sentence.length = 0;
+    renderSentence();
+  };
+
+  function onPadPress(gid, idx, vel){
+    const g = App.groups.find(x => x.id === gid);
+    if (!g) return;
+    const p = g.pads[idx];
+    if (!p) return;
+
+    if (p.mode === PadMode.RETRIGGER)          triggerRetrigger(p, vel);
+    else if (p.mode === PadMode.TOGGLE_START)  togglePad(p, false);
+    else if (p.mode === PadMode.TOGGLE_RESUME) togglePad(p, true);
+    else if (p.mode === PadMode.RECORD){
+      const st = padRecorders.get(p);
+      if (st && st.active) stopPadRecording(p, gid, idx);
+      else startPadRecording(p, gid, idx);
+    }
+
+    if ((!p.buffer) && ttsFallbackChk && ttsFallbackChk.checked){
+      const spoken = (p.phrase && p.phrase.trim()) ? p.phrase.trim() : p.name;
+      ttsSpeak(spoken, Number(gapMsNum.value || 250));
+    }
+
+    if (composeMode){
+      const text = (p.phrase && p.phrase.trim()) ? p.phrase.trim() : p.name;
+      App.sentence.push({ gid, idx, name: p.name, text, color: g.color });
+      renderSentence();
+    }
+
+    flashPad(gid, idx);
+  }
+
+  /* ========= Kit Editor (per-group) ========= */
+  function updateEditorBadge(g){
+    kitGroupName.textContent = `${g.name} (${g.rows}×${g.cols})`;
+    kitGroupDot.style.background = g.color;
+  }
+
+  function toggleKitForGroup(gid){
+    if (App.editGid === gid && kitEditor.classList.contains('show')){
+      App.editGid = null;
+      kitEditor.classList.remove('show');
+      renderBoards();
+      renderGroupList();
+      return;
+    }
+    App.editGid = gid;
+    rebuildEditor();
+    kitEditor.classList.add('show');
+    groupsPanel.classList.remove('show');
+    renderBoards();
+    renderGroupList();
+  }
+
+  closeKitBtn.onclick = ()=>{
+    App.editGid = null;
+    kitEditor.classList.remove('show');
+    renderBoards();
+    renderGroupList();
+  };
+
+  function rebuildEditor(){
+    kitRows.innerHTML = '';
+    const g = App.groups.find(x => x.id === App.editGid) || App.groups[0];
+    if (!g){
+      kitGroupName.textContent = '—';
+      return;
+    }
+    updateEditorBadge(g);
+
+    const vocab = loadVocab();
+
+    for (let i=0;i<g.pads.length;i++){
+      const p = g.pads[i];
+
+      const row = document.createElement('div');
+      row.className = 'kit-row';
+
+      const fileId = `file_${g.id}_${i}`;
+      const imgId  = `img_${g.id}_${i}`;
+
+      row.innerHTML = `
+        <div class="namecell">
+          <div class="padid">${g.name} • Pad ${i+1}</div>
+          <input type="text" value="${p.name}" data-k="name" placeholder="Button label (short)">
+          <input type="text" value="${p.phrase || ''}" data-k="phrase" placeholder="Phrase for sentence (long, optional)">
+          <div class="fileline">
+            <input id="${fileId}" type="file" accept="audio/*" hidden>
+            <label class="btn small" for="${fileId}">Choose audio</label>
+            <button class="btn small" data-k="record">Record</button>
+            <span class="dur">${p.duration ? p.duration.toFixed(2) + 's' : '—'}</span>
+          </div>
+          <div class="fileline">
+            <input id="${imgId}" type="file" accept="image/*" hidden>
+            <label class="btn small" for="${imgId}">Choose image</label>
+            <img src="${p.img ? p.img : ''}" alt="" style="height:28px;border-radius:4px;${p.img ? '' : 'display:none'}">
+            <button class="btn small ghost" data-k="imgclear">Clear</button>
+          </div>
+        </div>
+        <div class="kit-controls">
+          <label>Mode
+            <select data-k="mode">
+              <option value="retrigger" ${p.mode === 'retrigger' ? 'selected' : ''}>Retrigger</option>
+              <option value="toggle_start" ${p.mode === 'toggle_start' ? 'selected' : ''}>Toggle (Start)</option>
+              <option value="toggle_resume" ${p.mode === 'toggle_resume' ? 'selected' : ''}>Toggle (Resume)</option>
+              <option value="record" ${p.mode === 'record' ? 'selected' : ''}>Record on Pad</option>
+            </select>
+          </label>
+          <label>Gain <input type="number" min="0" max="2" step="0.01" value="${p.gain}" data-k="gain" style="width:90px"></label>
+          <label>Pan  <input type="number" min="-1" max="1" step="0.01" value="${p.pan}" data-k="pan" style="width:90px"></label>
+          <label>Loop <input type="checkbox" ${p.loop ? 'checked' : ''} data-k="loop"></label>
+          <label>Reverse <input type="checkbox" ${p.reverse ? 'checked' : ''} data-k="reverse"></label>
+        </div>
+      `;
+
+      // Vocabulary → Pad picker
+      if (Array.isArray(vocab) && vocab.length){
+        const controls = row.querySelector('.kit-controls');
+        const wrap = document.createElement('div');
+        wrap.style.display = 'flex';
+        wrap.style.gap = '8px';
+        wrap.style.alignItems = 'center';
+
+        const lab = document.createElement('span');
+        lab.className = 'small muted';
+        lab.textContent = 'Vocabulary → Pad';
+
+        const sel = document.createElement('select');
+        sel.style.minWidth = '180px';
+
+        const ph = document.createElement('option');
+        ph.value = '';
+        ph.textContent = 'Pick a word/phrase…';
+        sel.appendChild(ph);
+
+        vocab.slice(0, 500).forEach(w=>{
+          const o = document.createElement('option');
+          o.value = w;
+          o.textContent = w;
+          sel.appendChild(o);
+        });
+
+        function applyVocab(val){
+          if (!val) return;
+          const prevName = p.name;
+          p.name = val;
+          if (!p.phrase || p.phrase.trim() === '' || p.phrase === prevName){
+            p.phrase = val;
+          }
+          const nameInp = row.querySelector('[data-k="name"]');
+          const phrInp  = row.querySelector('[data-k="phrase"]');
+          if (nameInp) nameInp.value = p.name;
+          if (phrInp)  phrInp.value  = p.phrase;
+          renderBoards();
+          renderSentence();
+          status(`Mapped vocabulary → ${p.name}`);
         }
+
+        sel.addEventListener('change', ()=> applyVocab(sel.value));
+
+        const useBtn = document.createElement('button');
+        useBtn.className = 'btn small';
+        useBtn.textContent = 'Use';
+        useBtn.onclick = ()=> applyVocab(sel.value);
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn small ghost';
+        delBtn.textContent = 'Delete';
+        delBtn.onclick = ()=>{
+          const val = sel.value;
+          if (!val) return;
+          const list = loadVocab().filter(w => w !== val);
+          saveVocab(list);
+          status(`Deleted "${val}" from vocabulary`);
+          rebuildEditor();
+        };
+
+        wrap.appendChild(lab);
+        wrap.appendChild(sel);
+        wrap.appendChild(useBtn);
+        wrap.appendChild(delBtn);
+        controls.appendChild(wrap);
+      }
+
+      // Field updates
+      row.addEventListener('input', (e)=>{
+        const t = e.target;
+        const k = t.dataset.k;
+        if (!k) return;
+
+        if (t.type === 'checkbox'){
+          p[k] = !!t.checked;
+        }else if (t.tagName === 'SELECT'){
+          p[k] = t.value;
+        }else if (k === 'name'){
+          const prevName = p.name;
+          p.name = t.value;
+          if (!p.phrase || p.phrase.trim() === '' || p.phrase === prevName){
+            p.phrase = p.name;
+            const phr = row.querySelector('[data-k="phrase"]');
+            if (phr) phr.value = p.phrase;
+          }
+          renderBoards();
+          renderSentence();
+        }else if (k === 'phrase'){
+          if (t.value.trim() === '') p.phrase = '';
+          else p.phrase = t.value;
+          renderSentence();
+        }else{
+          const num = Number(t.value);
+          if (!isNaN(num)) p[k] = num;
+        }
+      });
+
+      const phraseInput = row.querySelector('[data-k="phrase"]');
+      phraseInput.addEventListener('blur', ()=>{
+        if (!phraseInput.value.trim()){
+          p.phrase = p.name;
+          phraseInput.value = p.name;
+          renderSentence();
+        }
+      });
+
+      // per-pad record button in editor
+      const recordBtn = row.querySelector('[data-k="record"]');
+      if (recordBtn){
+        recordBtn.addEventListener('click', ()=>{
+          const st = padRecorders.get(p);
+          if (st && st.active){
+            stopPadRecording(p, g.id, i);
+            recordBtn.textContent = 'Record';
+          }else{
+            recordBtn.textContent = 'Stop';
+            startPadRecording(p, g.id, i, ()=>{ recordBtn.textContent = 'Record'; });
+          }
+        });
+      }
+
+      // audio file
+      row.querySelector('#' + fileId).onchange = async (e)=>{
+        const f = e.target.files && e.target.files[0];
+        if (!f) return;
+        try{
+          const arr = await f.arrayBuffer();
+          const buf = await actx.decodeAudioData(arr.slice(0));
+          p.buffer   = buf;
+          p.duration = buf.duration;
+          const inferred = f.name.replace(/\.[^.]+$/, '');
+          if (!p.name || /^Pad\s\d+/.test(p.name)){
+            const prevName = p.name;
+            p.name = inferred;
+            if (!p.phrase || p.phrase.trim() === '' || p.phrase === prevName){
+              p.phrase = p.name;
+              phraseInput.value = p.phrase;
+            }
+          }
+          p.b64 = bufferToBase64Wav(buf);
+          rebuildEditor();
+          renderBoards();
+          renderSentence();
+          status(`Loaded ${p.name}`);
+        }catch(err){
+          report('loadPadFile', err);
+        }
+      };
+
+      // image file
+      row.querySelector('#' + imgId).onchange = (e)=>{
+        const f = e.target.files && e.target.files[0];
+        if (!f) return;
+        const fr = new FileReader();
+        fr.onload = ()=>{
+          p.img = fr.result;
+          rebuildEditor();
+          renderBoards();
+        };
+        fr.readAsDataURL(f);
+      };
+
+      row.querySelector('[data-k="imgclear"]').onclick = ()=>{
+        p.img = null;
+        rebuildEditor();
+        renderBoards();
+      };
+
+      kitRows.appendChild(row);
+    }
+  }
+
+  /* ========= Stop All ========= */
+  stopAllBtn.onclick = ()=>{
+    for (const g of App.groups){
+      for (const p of g.pads){
+        stopPadVoices(p, true);
+        p.toggleOn    = false;
+        p.voice       = null;
+        p.savedOffset = 0;
       }
     }
-    build();
+    try{
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    }catch(_){}
+    stopSentence();
+    status('Stopped all');
+  };
 
-    document.getElementById('kbClear').addEventListener('click',()=> kbInput.value='');
+  /* ========= Save/Load (kits + sentences/scenes) ========= */
 
-    kbLinkPill.addEventListener('click',()=>{
-      const on = kbLinkPill.getAttribute('aria-pressed')!=='true';
-      kbLinkPill.setAttribute('aria-pressed', on ? 'true':'false');
-      kbLinkPill.style.outline = on ? '2px solid rgba(66,198,255,.5)' : 'none';
-    });
+  function bufferToBase64Wav(buf){
+    const ch    = buf.numberOfChannels;
+    const sr    = buf.sampleRate;
+    const frames= buf.length;
+    const bytesPerSample = 2;
+    const blockAlign     = ch * bytesPerSample;
+    const byteRate       = sr * blockAlign;
+    const dataSize       = frames * blockAlign;
+    const total          = 44 + dataSize;
 
-    toggleKbBtn.addEventListener('click',()=> kbPanel.classList.toggle('show'));
-    document.getElementById('kbCloseBtn').addEventListener('click',()=> kbPanel.classList.remove('show'));
-    document.getElementById('kbMinBtn').addEventListener('click',()=>{
-      if(kbRows.style.display!=='none'){ kbRows.style.display='none'; } else { kbRows.style.display=''; }
-    });
+    const ab = new ArrayBuffer(total);
+    const dv = new DataView(ab);
+    let p    = 0;
 
-    (function makeDraggable(box, handle){
-      let sx=0, sy=0, bx=0, by=0, dragging=false;
-      const start = (e)=>{
-        dragging=true;
-        const p = box.getBoundingClientRect();
-        bx = p.left; by = p.top;
-        sx = ('touches' in e)? e.touches[0].clientX : e.clientX;
-        sy = ('touches' in e)? e.touches[0].clientY : e.clientY;
-        document.addEventListener('mousemove',move,{passive:false});
-        document.addEventListener('mouseup',end);
-        document.addEventListener('touchmove',move,{passive:false});
-        document.addEventListener('touchend',end);
-        e.preventDefault();
-      };
-      const move = (e)=>{
-        if(!dragging) return;
-        const x = ('touches' in e)? e.touches[0].clientX : e.clientX;
-        const y = ('touches' in e)? e.touches[0].clientY : e.clientY;
-        let nx = bx + (x - sx);
-        let ny = by + (y - sy);
-        const vw = window.innerWidth, vh = window.innerHeight;
-        const r = box.getBoundingClientRect();
-        nx = Math.max(6, Math.min(vw - r.width - 6, nx));
-        ny = Math.max(6, Math.min(vh - r.height - 6, ny));
-        box.style.left = nx + 'px';
-        box.style.top  = ny + 'px';
-        box.style.right = 'auto';
-        box.style.bottom= 'auto';
-      };
-      const end = ()=>{
-        dragging=false;
-        document.removeEventListener('mousemove',move);
-        document.removeEventListener('mouseup',end);
-        document.removeEventListener('touchmove',move);
-        document.removeEventListener('touchend',end);
-      };
-      handle.addEventListener('mousedown',start);
-      handle.addEventListener('touchstart',start,{passive:false});
-    })(kbPanel, document.getElementById('kbBar'));
+    function wStr(s){ for (let i=0;i<s.length;i++) dv.setUint8(p++, s.charCodeAt(i)); }
+    function w16(v){ dv.setUint16(p, v, true); p += 2; }
+    function w32(v){ dv.setUint32(p, v, true); p += 4; }
 
-    function flash(sel, text){
-      const b = document.querySelector(sel);
-      const prev = b.textContent;
-      b.textContent = text;
-      setTimeout(()=>{ b.textContent = prev; }, 700);
+    wStr('RIFF');
+    w32(36 + dataSize);
+    wStr('WAVE');
+
+    wStr('fmt ');
+    w32(16);
+    w16(1);
+    w16(ch);
+    w32(sr);
+    w32(byteRate);
+    w16(blockAlign);
+    w16(16);
+
+    wStr('data');
+    w32(dataSize);
+
+    const tmp = new Float32Array(ch * frames);
+    for (let c=0;c<ch;c++){
+      buf.copyFromChannel(tmp.subarray(c*frames, (c+1)*frames), c);
     }
 
-    window.addEventListener('DOMContentLoaded',function(){
-      setTimeout(function(){
-        if(!window.__MEDPAD_READY){
-          var st=document.getElementById('status');
-          if(st) st.textContent='script not found — tried fallback';
-        }
-      },400);
+    let idx = 0;
+    for (let i=0;i<frames;i++){
+      for (let c=0;c<ch;c++){
+        let sample = tmp[idx++];
+        sample = Math.max(-1, Math.min(1, sample));
+        dv.setInt16(
+          p,
+          sample < 0 ? sample * 0x8000 : sample * 0x7fff,
+          true
+        );
+        p += 2;
+      }
+    }
+
+    const bytes = new Uint8Array(ab);
+    let bin = '';
+    for (let i=0;i<bytes.length;i++){
+      bin += String.fromCharCode(bytes[i]);
+    }
+    return 'data:audio/wav;base64,' + btoa(bin);
+  }
+
+  function base64ToArrayBuffer(b64){
+    const x   = b64.split(',').pop();
+    const bin = atob(x);
+    const len = bin.length;
+    const bytes = new Uint8Array(len);
+    for (let i=0;i<len;i++) bytes[i] = bin.charCodeAt(i);
+    return bytes.buffer;
+  }
+
+  /* ---- Sentence / scenes state ---- */
+  const SCENE_COUNT  = 8;
+  const sceneLabels  = ['A1','A2','A3','A4','B1','B2','B3','B4'];
+  let scenes         = Array.from({length:SCENE_COUNT}, ()=> null);
+  let currentScene   = 0;
+  let songMode       = false;
+  let chainEdit      = false;
+  let chain          = [];
+
+  function renderChain(){
+    chainView.textContent = chain.length
+      ? chain.map(i => sceneLabels[i]).join(' • ')
+      : '—';
+  }
+
+  function defaultChain(){ return [0,1,2,3,4,5,6,7]; }
+
+  function ensureScene(idx){
+    if (!scenes[idx]) scenes[idx] = { gapMs: Number(gapMsNum.value || 250), sentence: [] };
+    return scenes[idx];
+  }
+
+  function saveCurrentScene(){
+    const sc = ensureScene(currentScene);
+    sc.gapMs = Number(gapMsNum.value || 250);
+    sc.sentence = App.sentence.slice(0);
+  }
+
+  function setScene(idx){
+    saveCurrentScene();
+    currentScene = idx;
+    const sc = ensureScene(idx);
+    gapMsNum.value = String(sc.gapMs | 0 || 250);
+    wpmNum.value   = String(wpmFromMs(gapMsNum.value));
+    App.sentence   = sc.sentence.slice(0);
+    renderSentence();
+    updateSceneBar();
+    status('Scene: ' + sceneLabels[idx]);
+  }
+
+  function updateSceneBar(){
+    sceneBtns.forEach((b,bi)=> b.setAttribute('aria-pressed', bi === currentScene ? 'true' : 'false'));
+  }
+
+  songModeBtn.onclick = ()=>{
+    songMode = !songMode;
+    songModeBtn.setAttribute('aria-pressed', songMode ? 'true' : 'false');
+    status(songMode ? 'Story Mode: on' : 'Story Mode: off');
+  };
+
+  chainEditBtn.onclick = ()=>{
+    chainEdit = !chainEdit;
+    chainEditBtn.setAttribute('aria-pressed', chainEdit ? 'true' : 'false');
+    status(chainEdit ? 'Chain edit: tap scenes' : 'Chain edit: off');
+  };
+
+  chainClearBtn.onclick = ()=>{
+    chain.length = 0;
+    renderChain();
+    status('Chain cleared');
+  };
+
+  sceneBtns.forEach((btn, i)=>{
+    btn.onclick = ()=>{
+      if (chainEdit){
+        chain.push(i);
+        renderChain();
+      }else{
+        setScene(i);
+      }
+    };
+  });
+
+  function serializeSeq(){
+    return {
+      composeMode,
+      ttsFallback: !!ttsFallbackChk.checked,
+      currentScene,
+      chain,
+      scenes: scenes.map(s =>
+        s
+          ? {
+              gapMs: s.gapMs,
+              sentence: s.sentence.map(t => ({
+                gid : t.gid,
+                idx : t.idx,
+                name: t.name,
+                text: t.text,
+                color: t.color
+              }))
+            }
+          : null
+      )
+    };
+  }
+
+  function applySeq(s){
+    if (!s) return;
+    setCompose(!!s.composeMode);
+    if (ttsFallbackChk) ttsFallbackChk.checked = !!s.ttsFallback;
+
+    const scArr = Array.isArray(s.scenes) ? s.scenes : [];
+    scenes = Array.from({length:SCENE_COUNT}, (_,i)=>{
+      const src = scArr[i];
+      if (!src) return null;
+      const gap = (src.gapMs | 0) || 250;
+      const sent = Array.isArray(src.sentence)
+        ? src.sentence.map(t => ({
+            gid : t.gid,
+            idx : t.idx,
+            name: t.name,
+            text: (t.text && t.text.trim()) || t.name,
+            color: t.color
+          }))
+        : [];
+      return { gapMs: gap, sentence: sent };
     });
-  })();
-  </script>
-</body>
-</html>
+
+    const target = (typeof s.currentScene === 'number' && s.currentScene >= 0 && s.currentScene < SCENE_COUNT)
+      ? s.currentScene
+      : 0;
+    setScene(target);
+
+    if (Array.isArray(s.chain)){
+      chain = s.chain.slice(0);
+      renderChain();
+    }
+  }
+
+  function serialize(){
+    return {
+      groups: App.groups.map(g => ({
+        id   : g.id,
+        name : g.name,
+        rows : g.rows,
+        cols : g.cols,
+        color: g.color,
+        win   : (g.win && typeof g.win.x === 'number' && typeof g.win.y === 'number'
+          ? {
+              x: g.win.x,
+              y: g.win.y,
+              w: g.win.w,
+              h: g.win.h
+            }
+          : null),
+        pads : g.pads.map(p => ({
+          name   : p.name,
+          phrase : (p.phrase && p.phrase.trim()) ? p.phrase : p.name,
+          b64    : p.b64,
+          img    : p.img,
+          gain   : p.gain,
+          pan    : p.pan,
+          filterType: p.filterType,
+          cutoff : p.cutoff,
+          q      : p.q,
+          env    : p.env,
+          tune   : p.tune,
+          fine   : p.fine,
+          loop   : p.loop,
+          reverse: p.reverse,
+          choke  : p.choke,
+          mode   : p.mode
+        }))
+      })),
+      visible: Array.from(App.visible),
+      seq    : serializeSeq()
+    };
+  }
+
+  async function deserialize(obj){
+    App.groups.length = 0;
+    App.visible.clear();
+    App.editGid = null;
+    kitEditor.classList.remove('show');
+
+    if (Array.isArray(obj.groups)){
+      for (const gsrc of obj.groups){
+        const g = makeGroup(
+          gsrc.name || 'Group',
+          Number(gsrc.rows || 4),
+          Number(gsrc.cols || 4),
+          gsrc.color || DEFAULT_COLORS[(NEXT_GROUP_ID-1) % DEFAULT_COLORS.length]
+        );
+        const count = Math.min(g.pads.length, Array.isArray(gsrc.pads) ? gsrc.pads.length : 0);
+        for (let i=0;i<count;i++){
+          const src = gsrc.pads[i];
+          const dst = g.pads[i];
+          Object.assign(dst, src);
+          if (!dst.phrase || dst.phrase.trim() === '') dst.phrase = dst.name;
+          if (!dst.mode) dst.mode = PadMode.RETRIGGER;
+
+          if (src.b64){
+            try{
+              const wav = base64ToArrayBuffer(src.b64);
+              const buf = await actx.decodeAudioData(wav.slice(0));
+              dst.buffer   = buf;
+              dst.duration = buf.duration;
+            }catch(_){}
+          }
+          dst.toggleOn    = false;
+          dst.savedOffset = 0;
+          dst.voice       = null;
+          dst.voices      = [];
+        }
+        if (gsrc.win && typeof gsrc.win.x === 'number' && typeof gsrc.win.y === 'number'){
+          g.win = { x: gsrc.win.x, y: gsrc.win.y };
+          if (typeof gsrc.win.w === 'number' && gsrc.win.w > 0) g.win.w = gsrc.win.w;
+          if (typeof gsrc.win.h === 'number' && gsrc.win.h > 0) g.win.h = gsrc.win.h;
+        }
+        g.id = gsrc.id || g.id;
+        App.groups.push(g);
+      }
+      if (Array.isArray(obj.visible)){
+        for (const id of obj.visible) App.visible.add(id);
+      }
+      if (obj.seq) applySeq(obj.seq);
+    }else if (Array.isArray(obj.pads)){
+      const n    = obj.pads.length;
+      const side = Math.ceil(Math.sqrt(n));
+      const g    = makeGroup('Group', side, side);
+      for (let i=0;i<Math.min(n, g.pads.length);i++){
+        Object.assign(g.pads[i], obj.pads[i]);
+        if (!g.pads[i].phrase || g.pads[i].phrase.trim() === '') g.pads[i].phrase = g.pads[i].name;
+      }
+      App.groups = [g];
+      App.visible.add(g.id);
+    }
+
+    renderGroupList();
+    renderBoards();
+    renderSentence();
+    status('Kit loaded');
+  }
+
+  function serializeGroupExport(g){
+    return {
+      id   : g.id,
+      name : g.name,
+      rows : g.rows,
+      cols : g.cols,
+      color: g.color,
+      pads : g.pads.map(p => ({
+        name   : p.name,
+        phrase : (p.phrase && p.phrase.trim()) ? p.phrase : p.name,
+        b64    : p.b64,
+        img    : p.img,
+        gain   : p.gain,
+        pan    : p.pan,
+        filterType: p.filterType,
+        cutoff : p.cutoff,
+        q      : p.q,
+        env    : p.env,
+        tune   : p.tune,
+        fine   : p.fine,
+        loop   : p.loop,
+        reverse: p.reverse,
+        choke  : p.choke,
+        mode   : p.mode
+      }))
+    };
+  }
+
+  async function importGroupFromJson(groupObj, asNew){
+    if (!groupObj || !Array.isArray(groupObj.pads)) return;
+    let target = null;
+
+    if (!asNew && App.editGid){
+      target = App.groups.find(gr => gr.id === App.editGid) || null;
+    }
+
+    if (!target){
+      const rows = Number(groupObj.rows || 4);
+      const cols = Number(groupObj.cols || 4);
+      const g = makeGroup(
+        groupObj.name || 'Imported Group',
+        rows,
+        cols,
+        groupObj.color || DEFAULT_COLORS[(NEXT_GROUP_ID-1) % DEFAULT_COLORS.length]
+      );
+      App.groups.push(g);
+      App.visible.add(g.id);
+      target = g;
+      App.editGid = g.id;
+    }else{
+      const rows = Number(groupObj.rows || target.rows);
+      const cols = Number(groupObj.cols || target.cols);
+      resizeGroup(target, rows, cols);
+      target.name  = groupObj.name || target.name;
+      target.color = groupObj.color || target.color;
+    }
+
+    const padsSrc = groupObj.pads;
+    const count   = Math.min(target.pads.length, padsSrc.length);
+    for (let i=0;i<count;i++){
+      const src = padsSrc[i];
+      const dst = target.pads[i];
+      Object.assign(dst, src);
+      if (!dst.phrase || dst.phrase.trim() === '') dst.phrase = dst.name;
+
+      dst.toggleOn    = false;
+      dst.savedOffset = 0;
+      dst.voice       = null;
+      dst.voices      = [];
+      dst.buffer      = null;
+      dst.duration    = 0;
+
+      if (src.b64){
+        try{
+          const wav = base64ToArrayBuffer(src.b64);
+          const buf = await actx.decodeAudioData(wav.slice(0));
+          dst.buffer   = buf;
+          dst.duration = buf.duration;
+        }catch(_){}
+      }
+    }
+
+    renderGroupList();
+    renderBoards();
+    rebuildEditor();
+    renderSentence();
+  }
+
+  /* ---- Export / import buttons ---- */
+  saveKitBtn.onclick = ()=>{
+    if (App.editGid){
+      const g = App.groups.find(gr => gr.id === App.editGid);
+      if (g){
+        const payload = {
+          type  : 'medpad-group',
+          version: 1,
+          group : serializeGroupExport(g)
+        };
+        const blob = new Blob([JSON.stringify(payload)], {type:'application/json'});
+        const a    = document.createElement('a');
+        a.href     = URL.createObjectURL(blob);
+        const safe = (g.name || 'group').replace(/[^a-z0-9_-]+/gi,'_');
+        a.download = 'aac_sound_board_group_' + safe + '.json';
+        a.click();
+        return;
+      }
+    }
+
+    const payload = serialize();
+    const blob    = new Blob([JSON.stringify(payload)], {type:'application/json'});
+    const a       = document.createElement('a');
+    a.href        = URL.createObjectURL(blob);
+    a.download    = 'aac_sound_board_kit.json';
+    a.click();
+  };
+
+  loadKitBtn.onclick = ()=> loadKitFile.click();
+
+  loadKitFile.onchange = async ()=>{
+    const f = loadKitFile.files[0];
+    if (!f) return;
+    try{
+      const txt = await f.text();
+      const obj = JSON.parse(txt);
+      if (obj && obj.type === 'medpad-group' && obj.group){
+        await importGroupFromJson(obj.group, false);
+        status('Imported group into current board');
+      }else{
+        await deserialize(obj);
+      }
+    }catch(e){
+      report('kitImport', e);
+    }finally{
+      loadKitFile.value = '';
+    }
+  };
+
+  /* ========= Local library (IndexedDB with localStorage fallback) ========= */
+  const LS_KEY = 'medpad.kits.v3';
+  const KIT_DB_NAME = 'aac_sound_board_kits';
+  const KIT_DB_STORE = 'kits';
+
+  function loadLibLS(){
+    try{ return JSON.parse(localStorage.getItem(LS_KEY) || '{}'); }
+    catch(_){ return {}; }
+  }
+
+  function saveLibLS(obj){
+    try{ localStorage.setItem(LS_KEY, JSON.stringify(obj)); }
+    catch(_){}
+  }
+
+  function hasIndexedDB(){
+    return typeof indexedDB !== 'undefined';
+  }
+
+  let kitDbPromise = null;
+
+  function getKitDb(){
+    if (!hasIndexedDB()) return Promise.resolve(null);
+    if (kitDbPromise) return kitDbPromise;
+
+    kitDbPromise = new Promise((resolve)=>{
+      let opened = false;
+      const req = indexedDB.open(KIT_DB_NAME, 1);
+
+      req.onupgradeneeded = function(){
+        const db = req.result;
+        if (!db.objectStoreNames.contains(KIT_DB_STORE)){
+          db.createObjectStore(KIT_DB_STORE, { keyPath: 'name' });
+        }
+      };
+
+      req.onsuccess = function(){
+        opened = true;
+        const db = req.result;
+
+        // One-time migration from localStorage, if present
+        try{
+          const raw = localStorage.getItem(LS_KEY);
+          if (raw){
+            const parsed = JSON.parse(raw);
+            const names = Object.keys(parsed || {});
+            if (names.length){
+              const tx = db.transaction(KIT_DB_STORE, 'readwrite');
+              const store = tx.objectStore(KIT_DB_STORE);
+              names.forEach(name=>{
+                store.put({ name, data: parsed[name], migrated: true, ts: Date.now() });
+              });
+              tx.oncomplete = ()=>{ try{ localStorage.removeItem(LS_KEY); }catch(_){ } };
+            }
+          }
+        }catch(_){}
+
+        resolve(db);
+      };
+
+      req.onerror = function(){
+        console.error('indexedDB open error', req.error);
+        if (!opened){
+          resolve(null);
+        }
+      };
+
+      req.onblocked = function(){
+        console.warn('indexedDB open blocked');
+      };
+    });
+
+    return kitDbPromise;
+  }
+
+  async function kitDbGetAll(){
+    const db = await getKitDb();
+    if (!db){
+      const store = loadLibLS();
+      return Object.keys(store).map(name => ({ name, data: store[name] }));
+    }
+    return new Promise((resolve, reject)=>{
+      const tx = db.transaction(KIT_DB_STORE, 'readonly');
+      const store = tx.objectStore(KIT_DB_STORE);
+      const req = store.getAll();
+      req.onsuccess = function(){
+        resolve(req.result || []);
+      };
+      req.onerror = function(){
+        reject(req.error);
+      };
+    });
+  }
+
+  async function kitDbGet(name){
+    const db = await getKitDb();
+    if (!db){
+      const store = loadLibLS();
+      return store[name] || null;
+    }
+    return new Promise((resolve, reject)=>{
+      const tx = db.transaction(KIT_DB_STORE, 'readonly');
+      const store = tx.objectStore(KIT_DB_STORE);
+      const req = store.get(name);
+      req.onsuccess = function(){
+        const row = req.result;
+        resolve(row ? (row.data || null) : null);
+      };
+      req.onerror = function(){
+        reject(req.error);
+      };
+    });
+  }
+
+  async function kitDbPut(name, data){
+    const db = await getKitDb();
+    if (!db){
+      const store = loadLibLS();
+      store[name] = data;
+      saveLibLS(store);
+      return;
+    }
+    return new Promise((resolve, reject)=>{
+      const tx = db.transaction(KIT_DB_STORE, 'readwrite');
+      const store = tx.objectStore(KIT_DB_STORE);
+      const req = store.put({ name, data, ts: Date.now() });
+      req.onsuccess = function(){ resolve(); };
+      req.onerror = function(){ reject(req.error); };
+    });
+  }
+
+  async function kitDbDelete(name){
+    const db = await getKitDb();
+    if (!db){
+      const store = loadLibLS();
+      delete store[name];
+      saveLibLS(store);
+      return;
+    }
+    return new Promise((resolve, reject)=>{
+      const tx = db.transaction(KIT_DB_STORE, 'readwrite');
+      const store = tx.objectStore(KIT_DB_STORE);
+      const req = store.delete(name);
+      req.onsuccess = function(){ resolve(); };
+      req.onerror = function(){ reject(req.error); };
+    });
+  }
+
+  async function kitDbRename(oldName, newName){
+    if (!oldName || !newName || oldName === newName) return;
+    const db = await getKitDb();
+    if (!db){
+      const store = loadLibLS();
+      if (store[oldName]){
+        store[newName] = store[oldName];
+        delete store[oldName];
+        saveLibLS(store);
+      }
+      return;
+    }
+    const data = await kitDbGet(oldName);
+    if (!data) return;
+    await kitDbPut(newName, data);
+    await kitDbDelete(oldName);
+  }
+
+  async function refreshKitList(){
+    kitList.innerHTML = '';
+    try{
+      const entries = await kitDbGetAll();
+      if (!entries || !entries.length){
+        kitList.innerHTML = '<div class="muted small">No kits saved.</div>';
+        return;
+      }
+
+      const sorted = entries.slice().sort((a,b)=>{
+        const an = (a.name || '').toLowerCase();
+        const bn = (b.name || '').toLowerCase();
+        if (an < bn) return -1;
+        if (an > bn) return 1;
+        return 0;
+      });
+
+      sorted.forEach(entry=>{
+        const name = entry.name;
+        const card = document.createElement('div');
+        card.style.cssText = 'border:1px solid var(--line);border-radius:10px;padding:10px;background:#0f1519;display:flex;gap:8px;align-items:center;flex-wrap:wrap';
+
+        const title = document.createElement('div');
+        title.textContent = name;
+        title.style.cssText = 'font-weight:700;flex:1';
+
+        const loadBtn = document.createElement('button');
+        loadBtn.className = 'btn small';
+        loadBtn.textContent = 'Load';
+
+        const renBtn = document.createElement('button');
+        renBtn.className = 'btn small ghost';
+        renBtn.textContent = 'Rename';
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn small ghost';
+        delBtn.textContent = 'Delete';
+
+        loadBtn.onclick = async ()=>{
+          try{
+            const data = await kitDbGet(name);
+            if (!data) return;
+            await deserialize(data);
+            kitNameInp.value = name;
+            status('Loaded kit: ' + name);
+          }catch(e){
+            report('kitLoad', e);
+          }
+        };
+
+        renBtn.onclick = async ()=>{
+          const nn = prompt('Rename kit', name);
+          if (!nn || nn === name) return;
+          try{
+            await kitDbRename(name, nn);
+            kitNameInp.value = nn;
+            refreshKitList();
+          }catch(e){
+            report('kitRename', e);
+          }
+        };
+
+        delBtn.onclick = async ()=>{
+          if (!confirm('Delete kit "' + name + '"?')) return;
+          try{
+            await kitDbDelete(name);
+            refreshKitList();
+          }catch(e){
+            report('kitDelete', e);
+          }
+        };
+
+        const right = document.createElement('div');
+        right.style.display = 'flex';
+        right.style.gap     = '8px';
+        right.appendChild(loadBtn);
+        right.appendChild(renBtn);
+        right.appendChild(delBtn);
+
+        card.appendChild(title);
+        card.appendChild(right);
+        kitList.appendChild(card);
+      });
+    }catch(e){
+      report('refreshKitList', e);
+      kitList.innerHTML = '<div class="muted small">Error loading kits.</div>';
+    }
+  }
+
+  kitSaveAsBtn.onclick = async ()=>{
+    const name = (kitNameInp.value || '').trim() || ('Kit ' + new Date().toLocaleString());
+    try{
+      await kitDbPut(name, serialize());
+      await refreshKitList();
+      status('Saved kit: ' + name);
+    }catch(e){
+      report('kitSaveAs', e);
+    }
+  };
+
+  kitExportBtn.onclick = ()=>{
+    const name = (kitNameInp.value || '').trim() || 'exported_kit';
+    const blob = new Blob([JSON.stringify(serialize())], {type:'application/json'});
+    const a    = document.createElement('a');
+    a.href     = URL.createObjectURL(blob);
+    a.download = name + '.json';
+    a.click();
+  };
+
+  kitImportBtn.onclick = ()=> kitImportFile.click();
+
+  kitImportFile.onchange = async ()=>{
+    const f = kitImportFile.files[0];
+    if (!f) return;
+    try{
+      const txt = await f.text();
+      const obj = JSON.parse(txt);
+      if (obj && obj.type === 'medpad-group' && obj.group){
+        await importGroupFromJson(obj.group, true);
+        status('Imported group as new board');
+      }else{
+        await deserialize(obj);
+        status('Imported kit file');
+      }
+    }catch(e){
+      report('kitImport', e);
+    }finally{
+      kitImportFile.value = '';
+    }
+  };
+
+  /* ========= boot ========= */
+  function initDefaults(){
+    App.groups.length = 0;
+    App.visible.clear();
+    App.editGid = null;
+  }
+
+  function init(){
+    try{
+      initDefaults();
+      renderGroupList();
+      renderBoards();
+
+      ensureScene(0);
+      setScene(0);
+      renderChain();
+      refreshKitList();
+      setCompose(false);
+      status('ready');
+      window.__MEDPAD_READY = true;
+    }catch(e){
+      report('init', e);
+    }
+  }
+
+  init();
+})();
