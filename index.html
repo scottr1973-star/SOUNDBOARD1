@@ -659,6 +659,10 @@ Created by Scott Russo.
     (function makeDraggable(box, handle){
       let sx=0, sy=0, bx=0, by=0, dragging=false;
       const start = (e)=>{
+        const target = e.target;
+        if (target.closest('.kb-window-controls')) {
+          return;
+        }
         dragging=true;
         const p = box.getBoundingClientRect();
         bx = p.left; by = p.top;
