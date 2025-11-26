@@ -296,10 +296,6 @@ Created by Scott Russo.
     min-height:60px;
   }
 
-  @media (max-width:1100px){
-    .kb-row{flex-wrap:wrap}
-  }
-
   /* Responsive keyboard sizing for phones and small screens */
   @media (max-width:768px){
     #kbPanel{
@@ -660,7 +656,7 @@ Created by Scott Russo.
       let sx=0, sy=0, bx=0, by=0, dragging=false;
       const start = (e)=>{
         const target = e.target;
-        if (target.closest('.kb-window-controls')) {
+        if (target && target.closest && target.closest('.kb-window-controls')) {
           return;
         }
         dragging=true;
